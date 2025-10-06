@@ -95,10 +95,14 @@
         </header>
 
         <!-- DEBUG & DIAGNÒSTIC (Ajudar a l'usuari a comprovar la connexió) -->
-        <div class="text-xs p-2 mb-4 bg-yellow-50 rounded-lg border border-yellow-200">
-            <h4 class="font-bold text-yellow-800 mb-1">Panell de Diagnòstic (Debug)</h4>
-            <span id="user-id-display" class="block text-gray-600">ID d'Usuari: <span class="font-mono text-xs">Carregant...</span></span>
-            <span id="game-id-display" class="block text-gray-600">ID de Partida Activa: <span id="game-id-value" class="font-bold text-red-600">N/A</span></span>
+        <div id="debug-and-host-tools" class="text-xs p-2 mb-4 bg-yellow-50 rounded-lg border border-yellow-200 flex flex-col sm:flex-row justify-between items-center">
+            <div class="mb-2 sm:mb-0">
+                <h4 class="font-bold text-yellow-800 mb-1">Panell de Diagnòstic (Debug)</h4>
+                <span id="user-id-display" class="block text-gray-600">ID d'Usuari: <span class="font-mono text-xs">Carregant...</span></span>
+                <span id="game-id-display" class="block text-gray-600">ID de Partida Activa: <span id="game-id-value" class="font-bold text-red-600">N/A</span></span>
+            </div>
+            <!-- Botó de Reinici de l'Amfitrió -->
+            <div id="host-reset-area" class="mt-2 sm:mt-0 w-full sm:w-auto"></div>
         </div>
         <!-- Fi de DEBUG & DIAGNÒSTIC -->
 
@@ -128,7 +132,7 @@
                         <h4 class="font-bold text-gray-700 mb-2 flex items-center">
                             <i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Descarts
                         </h4>
-                        <div id="discard-pile" class="w-20 h-32 border-4 border-gray-400 rounded-lg cursor-pointer hover:border-green-600 transition duration-200">
+                        <div id="discard-pile" class="w-20 h-32 border-4 border-gray-400 rounded-lg">
                             <!-- Carta visible -->
                         </div>
                     </div>
@@ -394,6 +398,7 @@
             if (game.numPlayers > 2) {
                 return true;
             }
+            // Regla de 2 jugadors: Han de tenir una seqüència de 3 per guanyar amb un Rack-O
             if (game.numPlayers === 2) {
                 return checkForConsecutiveSequence(playerRack);
             }
@@ -405,6 +410,7 @@
             let score = 0;
             if (rack.length !== NUM_CARDS_IN_RACK || rack.includes(null)) return 0;
             
+            // Rack-O tradicional: 5 punts per cada carta que estigui en ordre ascendent respecte a la carta anterior.
             for (let i = 0; i < rack.length; i++) {
                 if (i === 0 || rack[i] > rack[i - 1]) {
                     score += SEQUENCE_POINTS_PER_CARD;
@@ -412,6 +418,7 @@
                     break;
                 }
             }
+            // En un Rack-O perfecte (ordre ascendent complet), la puntuació seria 50 (10*5).
             return score;
         };
         // --- FI DE FUNCIONS CORE DE JOC ---
@@ -799,22 +806,10 @@
                 
                 heldCard = cardValue;
                 heldSource = source;
-                renderRack(); 
-                
+                // No cal renderRack aquí, ja que l'actualització es farà al renderGame des del snapshot.
+                // Però sí que cal actualitzar la carta flotant immediatament
                 floatingCardValueElement.textContent = heldCard;
                 floatingCardElement.classList.add('active');
-
-                if (source === 'draw') {
-                    // The button will be shown in renderGame's action area update
-                } else {
-                    const messageElement = document.getElementById('action-area');
-                    messageElement.innerHTML = `
-                        <div class="p-2 border border-blue-200 rounded-lg bg-blue-50">
-                            <p class="text-sm font-semibold text-blue-700">Has agafat la carta <span class="text-xl text-red-600 font-extrabold">${cardValue}</span> del descart. Clica una ranura per reemplaçar.</p>
-                        </div>
-                    `;
-                    document.getElementById('discard-immediate-btn')?.classList.add('hidden');
-                }
 
 
             } catch (error) {
@@ -823,9 +818,19 @@
             }
         };
 
-        const handleDiscardImmediate = async () => {
-            if (!isMyTurn() || !heldCard || heldSource !== 'draw') return showModal("❌ Acció Invàlida", "Només pots descartar immediatament si agafes del munt.");
+        /**
+         * Funció per descartar la carta actualment a la mà.
+         * Només es permet si la carta s'ha agafat del munt ('draw').
+         */
+        const handleDiscardHeldCard = async () => {
+            if (!isMyTurn() || !heldCard) {
+                return showModal("❌ Acció Invàlida", "Primer has d'agafar una carta.");
+            }
 
+            if (heldSource !== 'draw') {
+                return showModal("❌ Acció Invàlida", "Si has agafat la carta del descart, has de reemplaçar una ranura.");
+            }
+            
             const cardToDiscard = heldCard;
 
             try {
@@ -843,18 +848,18 @@
                     transaction.update(gameRef, {
                         discardPile: game.discardPile,
                         turn: nextTurnId,
-                        messages: arrayUnion(`${getMyPlayer().name} ha descartat immediatament la carta ${cardToDiscard}.`),
+                        messages: arrayUnion(`${getMyPlayer().name} ha descartat la carta ${cardToDiscard}.`),
                         lastUpdate: Date.now() // Actualitza timestamp
                     });
                 });
+                
                 heldCard = null;
                 heldSource = null;
                 floatingCardElement.classList.remove('active'); 
-                document.getElementById('discard-immediate-btn')?.classList.add('hidden');
 
             } catch (error) {
-                console.error("Error descartant immediatament:", error);
-                showModal("Error", "No s'ha pogut descartar immediatament la carta.");
+                console.error("Error descartant la carta:", error);
+                showModal("Error", "No s'ha pogut descartar la carta.");
             }
         };
 
@@ -887,6 +892,7 @@
                     let winnerId = null;
                     let winMessage = '';
 
+                    // Comprova si el nou rack compleix les condicions de victòria
                     if (checkVictoryCondition(game, newRack)) {
                         status = 'finished_hand';
                         winnerId = userId;
@@ -899,10 +905,13 @@
                         game.messages.push(winMessage);
                     }
 
+                    // Actualitza el rack del jugador a la llista de jugadors
                     currentPlayer.rack = newRack;
                     
+                    // Afegeix la carta reemplaçada a la pila de descarts
                     game.discardPile.push(cardToDiscard);
 
+                    // Determina el següent torn (si la mà no ha acabat)
                     const nextTurnId = (status !== 'finished_hand') ? getNextPlayerId(game) : game.turn;
 
                     transaction.update(gameRef, {
@@ -919,7 +928,6 @@
                 heldCard = null;
                 heldSource = null;
                 floatingCardElement.classList.remove('active'); 
-                document.getElementById('discard-immediate-btn')?.classList.add('hidden');
 
             } catch (error) {
                 console.error("Error reemplaçant la carta:", error);
@@ -979,35 +987,38 @@
                         if (p.id === winnerId) {
                             score = RACKO_POINTS; 
                         } else {
+                            // Puntuació de seqüència per als que no han guanyat
                             score = calculateSequenceScore(p.rack); 
                         }
 
                         const newTotalScore = p.score + score;
                         return {
                             ...p,
-                            rack: Array(NUM_CARDS_IN_RACK).fill(null), 
+                            rack: Array(NUM_CARDS_IN_RACK).fill(null), // Reinicia el rack
                             score: newTotalScore,
                             scoreHistory: [...p.scoreHistory, score]
                         };
                     });
 
+                    // Comprova si hi ha un guanyador global (>500 punts)
                     const gameWinner = newScores.find(p => p.score >= 500);
 
+                    // Prepara per a la nova mà
                     const maxCardValue = game.maxCardValue;
-                    const fullDeck = createAndShuffleDeck(maxCardValue);
-                    let deck = fullDeck;
+                    let deck = createAndShuffleDeck(maxCardValue); // Nova baralla
                     const newDiscardPile = [];
-                    const nextTurnId = game.winnerId; 
+                    const nextTurnId = game.winnerId; // El guanyador comença la següent mà 
 
                     const playersForNextHand = newScores.map(p => {
                         const newRack = [];
+                        // Reparteix 10 cartes noves, de baix a dalt (pop in, reverse at the end)
                         for (let i = 0; i < NUM_CARDS_IN_RACK; i++) {
                             const card = deck.pop(); 
                             if (card !== undefined) {
                                 newRack.push(card);
                             }
                         }
-                        newRack.reverse(); 
+                        newRack.reverse(); // Col·locar-les correctament (el 1r pop és la carta més alta)
 
                         return { ...p, rack: newRack };
                     });
@@ -1178,6 +1189,20 @@
             const isFinishedGame = game.status === 'finished';
             const isCurrentTurn = isMyTurn() && !isFinishedHand && !isFinishedGame;
 
+            // Check if current user is the host (creator is the first player in the array)
+            const isCreator = game.players.length > 0 && game.players[0].id === userId;
+
+            // Add Host Reset Button (Millora 1)
+            const hostResetArea = document.getElementById('host-reset-area');
+            if (isCreator && game.status !== 'lobby') {
+                hostResetArea.innerHTML = `
+                    <button onclick="window.gameFunctions.confirmReset()" class="w-full py-2 px-3 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 transition duration-300 flex items-center justify-center text-xs whitespace-nowrap">
+                        <i data-lucide="alert-triangle" class="w-3 h-3 mr-1"></i> Reiniciar Partida (Host)
+                    </button>
+                `;
+            } else {
+                hostResetArea.innerHTML = '';
+            }
 
             // 4. GESTIÓ DE SO i VIBRACIÓ (Nova Funcionalitat de Notificacions)
             
@@ -1248,13 +1273,36 @@
             document.getElementById('draw-pile-count').textContent = game.deck.length;
 
             const discardCard = game.discardPile[game.discardPile.length - 1];
-            const discardClickableClass = isCurrentTurn && !heldCard && discardCard !== undefined ? 'cursor-pointer hover:border-green-600' : 'cursor-default';
-            const discardContent = discardCard !== undefined ? `<div class="card-value w-full h-full flex items-center justify-center text-4xl text-red-600" onclick="${isCurrentTurn && !heldCard ? 'window.gameFunctions.handleDrawCard(\'discard\')' : ''}">${discardCard}</div>` : `<div class="flex items-center justify-center w-full h-full text-lg text-gray-500">Buit</div>`;
-            document.getElementById('discard-pile').innerHTML = discardContent;
-            document.getElementById('discard-pile').className = `w-20 h-32 border-4 border-gray-400 rounded-lg transition duration-200 ${discardClickableClass}`;
+            
+            // Condició per AGARRAR la carta del discard
+            const canDrawFromDiscard = isCurrentTurn && !heldCard && discardCard !== undefined;
+            
+            // Condició per DESCARTAR la carta agafada (Millora 2)
+            const canDiscardHeldCard = isCurrentTurn && heldCard && heldSource === 'draw' && game.status === 'playing';
+
+            let discardClickAction = '';
+            let discardClickableClass = '';
+            
+            if (canDrawFromDiscard) {
+                discardClickAction = `window.gameFunctions.handleDrawCard('discard')`;
+                discardClickableClass = 'cursor-pointer hover:border-green-600';
+            } else if (canDiscardHeldCard) {
+                // Si el jugador té una carta i la pot descartar (agafada del munt)
+                discardClickAction = `window.gameFunctions.handleDiscardHeldCard()`;
+                discardClickableClass = 'cursor-pointer hover:border-red-600 ring-4 ring-red-400';
+            } else {
+                discardClickableClass = 'cursor-default';
+            }
+
+            const discardContent = discardCard !== undefined ? `<div class="card-value w-full h-full flex items-center justify-center text-4xl text-red-600">${discardCard}</div>` : `<div class="flex items-center justify-center w-full h-full text-lg text-gray-500">Buit</div>`;
+            
+            const discardPileElement = document.getElementById('discard-pile');
+            discardPileElement.innerHTML = discardContent;
+            discardPileElement.className = `w-20 h-32 border-4 border-gray-400 rounded-lg transition duration-200 ${discardClickableClass}`;
+            discardPileElement.setAttribute('onclick', discardClickAction);
 
 
-            // 7. Botó d'acció/Estat del joc
+            // 7. Botó d'acció/Estat del joc (Actualitzat per reflectir el nou mecanisme de descart)
             let actionHtml = '';
             
             if (isFinishedHand && game.winnerId === userId) {
@@ -1269,14 +1317,22 @@
                     <i data-lucide="refresh-cw" class="mr-2"></i> Tornar al Lobby
                 </button>`;
             } else if (isCurrentTurn && heldCard) {
-                 actionHtml = `
-                    <div class="p-2 border border-blue-200 rounded-lg bg-blue-50">
-                        <p class="text-sm font-semibold text-blue-700">Has agafat la carta <span class="text-xl text-red-600 font-extrabold">${heldCard}</span>. Clica una ranura per reemplaçar.</p>
-                        <button id="discard-immediate-btn" onclick="window.gameFunctions.handleDiscardImmediate()" class="hidden w-full py-2 mt-2 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 transition duration-300">
-                            Descartar Immediatament (Només si has agafat del munt)
-                        </button>
-                    </div>
-                 `;
+                 // Missatge actualitzat segons la font de la carta
+                 if (heldSource === 'draw') {
+                     actionHtml = `
+                        <div class="p-2 border border-blue-200 rounded-lg bg-blue-50">
+                            <p class="text-base font-semibold text-blue-700">Has agafat la carta <span class="text-xl text-red-600 font-extrabold">${heldCard}</span> del munt.</p>
+                            <p class="text-sm text-blue-800 font-bold mt-1">OPCIONS: 1. Clica la **Pila de Descarts** per descartar, O 2. Clica una ranura per reemplaçar.</p>
+                        </div>
+                    `;
+                 } else { // heldSource === 'discard'
+                      actionHtml = `
+                        <div class="p-2 border border-blue-200 rounded-lg bg-blue-50">
+                            <p class="text-base font-semibold text-blue-700">Has agafat la carta <span class="text-xl text-red-600 font-extrabold">${heldCard}</span> del descart.</p>
+                            <p class="text-sm text-red-800 font-bold mt-1">ACCIÓ REQUERIDA: Has de reemplaçar una ranura del teu atril.</p>
+                        </div>
+                    `;
+                 }
             } else if (isCurrentTurn) {
                 actionHtml = `<p class="text-lg font-bold text-green-700 p-2 border border-green-200 rounded-lg bg-green-100">
                     <i data-lucide="bell" class="w-5 h-5 inline mr-1 animate-pulse"></i> És el teu torn! Tria del munt o del descart.
@@ -1318,11 +1374,7 @@
                     `;
                 }).join('');
 
-            // 10. Actualitzar botó de descart immediat i icones
-            if (isCurrentTurn && heldCard && heldSource === 'draw' && game.status === 'playing') {
-                document.getElementById('discard-immediate-btn')?.classList.remove('hidden');
-            }
-
+            // 10. Actualitzar icones
             lucide.createIcons();
         };
 
@@ -1354,7 +1406,7 @@
                     ` : `
                         <p class="mt-4 text-center text-red-600 font-semibold">Esperant que tots els jugadors (${game.numPlayers}) s'uneixin per iniciar la partida.</p>
                     `}
-                    <!-- NOU BOTÓ DE REINICIAR (HOST ONLY) -->
+                    <!-- Botó de Reiniciar (HOST ONLY) -->
                     <button onclick="window.gameFunctions.confirmReset()" class="w-full py-2 mt-4 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 transition duration-300 flex items-center justify-center">
                         <i data-lucide="alert-triangle" class="w-4 h-4 mr-2"></i> Reiniciar Registre de Partida (Host)
                     </button>
@@ -1363,6 +1415,7 @@
             
             container.innerHTML = actionHtml; 
             lucide.createIcons();
+            document.getElementById('host-reset-area').innerHTML = ''; // Ensure host button is hidden in lobby debug panel
         };
 
         const renderRack = () => {
@@ -1374,6 +1427,7 @@
             const isCurrentTurn = isMyTurn() && gameState.status === 'playing';
             
             rackElement.innerHTML = myPlayer.rack.map((card, index) => {
+                // Es pot reemplaçar si és el teu torn, tens una carta a la mà, i el joc està actiu
                 const isPlayableSlot = isCurrentTurn && heldCard && card !== null && gameState.status === 'playing';
                 let cardHtml;
                 const slotNumber = index + 1; 
@@ -1407,12 +1461,12 @@
             startGame,
             handleDrawCard,
             handleReplaceCard,
-            handleDiscardImmediate,
+            handleDiscardHeldCard, // Funció de descart actualitzada
             endHandAndScore,
             resetLobbyState: () => resetLobbyState(), // Export without message for UI button
             triggerRemoteBeep, 
-            deleteGameAndReset, // Exportació del reinici forçat
-            confirmReset, // Exportació del modal de confirmació
+            deleteGameAndReset, 
+            confirmReset, 
             closeModal
         };
 
