@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rack-O Multijugador v 1.2.</title>
+    <title>Rack-O Game: Multijugador</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inclou les icones Lucide -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -163,9 +163,14 @@
         <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
             <h4 id="modal-title" class="text-2xl font-bold mb-3 text-red-600">Títol del Modal</h4>
             <p id="modal-message" class="text-gray-700 mb-4">Missatge del modal.</p>
-            <button onclick="window.gameFunctions.closeModal()" class="w-full py-2 bg-indigo-500 text-white font-semibold rounded-lg hover:bg-indigo-700">
-                Entès
-            </button>
+            <div id="modal-actions" class="flex flex-col space-y-2">
+                <button id="modal-confirm-btn" class="hidden w-full py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition duration-200">
+                    Confirmar
+                </button>
+                <button id="modal-close-btn" onclick="window.gameFunctions.closeModal()" class="w-full py-2 bg-indigo-500 text-white font-semibold rounded-lg hover:bg-indigo-700 transition duration-200">
+                    Entès
+                </button>
+            </div>
         </div>
     </div>
 
@@ -173,7 +178,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, updateDoc, arrayRemove, arrayUnion, runTransaction, getDocs, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, updateDoc, arrayRemove, arrayUnion, runTransaction, getDocs, where, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         /** * ===============================================================================
@@ -216,9 +221,90 @@
         let heldCard = null; 
         let heldSource = null; 
         
+        // Constants de Joc
+        const CARD_DECK_SIZES = { 2: 40, 3: 50, 4: 60 };
+        const NUM_CARDS_IN_RACK = 10;
+        const RACKO_POINTS = 75;
+        const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minuts = 300,000 ms
+
         // Referència al component de la carta flotant (cursor)
         const floatingCardElement = document.getElementById('floating-card');
         const floatingCardValueElement = floatingCardElement.querySelector('.card-value');
+
+        // GESTIÓ DE SO I VIBRACIÓ
+        let audioContext;
+        let lastTurnProcessed = null; 
+        let lastWinProcessed = null; 
+
+        const initAudio = () => {
+            if (!audioContext) {
+                 try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.warn("Web Audio API no suportada. Els sons estaran desactivats.", e);
+                }
+            }
+        };
+
+        const playBeep = () => {
+            if (!audioContext) return;
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.type = 'square'; 
+            oscillator.frequency.setValueAtTime(440, audioContext.currentTime); 
+            gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.3);
+
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.3);
+        };
+
+        const playWinMelody = () => {
+            if (!audioContext) return;
+            const tempo = 120; 
+            const quarterNote = 60 / tempo; 
+
+            const melody = [
+                { freq: 660, duration: quarterNote * 0.5 }, 
+                { freq: 784, duration: quarterNote * 0.5 },
+                { freq: 988, duration: quarterNote * 1.5 } 
+            ];
+
+            let time = audioContext.currentTime;
+
+            melody.forEach(note => {
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(note.freq, time); 
+                gainNode.gain.setValueAtTime(0.3, time);
+
+                gainNode.gain.linearRampToValueAtTime(0.1, time + 0.01);
+                gainNode.gain.linearRampToValueAtTime(0.001, time + note.duration);
+
+                oscillator.start(time);
+                oscillator.stop(time + note.duration);
+
+                time += note.duration; 
+            });
+        };
+
+        const vibrate = (pattern = [200]) => {
+            if ('vibrate' in navigator) {
+                navigator.vibrate(pattern);
+            }
+        };
+        // FI DE GESTIÓ DE SO I VIBRACIÓ
+
 
         // Escolta el moviment del ratolí per la carta flotant
         document.addEventListener('mousemove', (e) => {
@@ -274,7 +360,6 @@
         };
 
         // --- FUNCIONS CORE DE JOC ---
-        // Funció per crear i barrejar la baralla
         const createAndShuffleDeck = (maxCard) => {
             let newDeck = Array.from({ length: maxCard }, (_, i) => i + 1);
             for (let i = newDeck.length - 1; i > 0; i--) {
@@ -284,9 +369,7 @@
             return newDeck;
         };
 
-        // Condició 1: Comprovar si totes les cartes estan en ordre ascendent
         const checkAscendingOrder = (rack) => {
-            const NUM_CARDS_IN_RACK = 10;
             if (rack.length !== NUM_CARDS_IN_RACK || rack.includes(null)) return false;
             for (let i = 0; i < rack.length - 1; i++) {
                 if (rack[i] >= rack[i + 1]) {
@@ -296,7 +379,6 @@
             return true;
         };
 
-        // Condició 2 (Només 2 Jugadors): Comprovar si hi ha 3 números consecutius
         const checkForConsecutiveSequence = (rack) => {
             for (let i = 0; i <= rack.length - 3; i++) {
                 if (rack[i] + 1 === rack[i + 1] && rack[i + 1] + 1 === rack[i + 2]) {
@@ -306,7 +388,6 @@
             return false;
         };
 
-        // Comprovació de la Condició de Victòria Final
         const checkVictoryCondition = (game, playerRack) => {
             const isAscending = checkAscendingOrder(playerRack);
             if (!isAscending) return false;
@@ -319,10 +400,8 @@
             return false; 
         };
 
-        // Funció per calcular la puntuació de Rack-O (Seqüència ascendent des de la ranura #1)
         const calculateSequenceScore = (rack) => {
             const SEQUENCE_POINTS_PER_CARD = 5;
-            const NUM_CARDS_IN_RACK = 10;
             let score = 0;
             if (rack.length !== NUM_CARDS_IN_RACK || rack.includes(null)) return 0;
             
@@ -339,11 +418,39 @@
 
 
         // --- FIREBASE I GESTIÓ DE PARTIDES ---
-        const CARD_DECK_SIZES = { 2: 40, 3: 50, 4: 60 };
-        const NUM_CARDS_IN_RACK = 10;
-        const RACKO_POINTS = 75;
 
         const getGameRef = (gameId) => doc(db, 'artifacts', appId, 'public', 'data', 'racko_games', gameId);
+
+        const deleteGameAndReset = async (isManual = false) => {
+            if (!gameId) return;
+
+            const currentId = gameId; // Capture ID before state reset
+            
+            // 1. Unsubscribe first to stop listening
+            if (unsubscribeGame) {
+                unsubscribeGame();
+                unsubscribeGame = null;
+            }
+
+            try {
+                console.log(`[RESET] Deleting game document ${currentId}.`);
+                // 2. Delete the Firestore document (only if it still exists to avoid unnecessary errors)
+                await deleteDoc(getGameRef(currentId)); 
+
+                // 3. Reset local state
+                resetLobbyState(isManual ? 
+                    "La partida ha estat reiniciada correctament per l'amfitrió." : 
+                    "La partida ha estat reiniciada automàticament per inactivitat (5 minuts)."
+                );
+            } catch (error) {
+                console.warn("Error eliminant el document de la partida. Suposant que ja ha estat eliminat per un altre client o per regles de seguretat.", error);
+                // Fallback: just reset local state if deletion fails (e.g., permission issues)
+                resetLobbyState(isManual ? 
+                    "La partida ha estat reiniciada correctament per l'amfitrió." : 
+                    "La partida ha estat reiniciada automàticament per inactivitat (5 minuts)."
+                );
+            }
+        };
 
         const loadLastGame = async () => {
             if (!userId || gameId) return; 
@@ -351,13 +458,12 @@
             // Search for an active game where the user is a participant
             const q = query(
                 collection(db, 'artifacts', appId, 'public', 'data', 'racko_games'),
-                where('playerIds', 'array-contains', userId) // Check if user is in playerIds array
+                where('playerIds', 'array-contains', userId) 
             );
             
             try {
                 const snapshot = await getDocs(q);
                 if (!snapshot.empty) {
-                    // Found an existing game!
                     gameId = snapshot.docs[0].id;
                     console.log(`[LOAD] Reconnecting to existing game ID: ${gameId}`);
                     startListeningToGame(gameId);
@@ -379,21 +485,30 @@
             unsubscribeGame = onSnapshot(getGameRef(gameId), (doc) => {
                 if (doc.exists()) {
                     gameState = doc.data();
+                    
+                    // === NOU: Detecció d'inactivitat ===
+                    const lastUpdate = gameState.lastUpdate || 0;
+                    const timeElapsed = Date.now() - lastUpdate;
+
+                    if (timeElapsed > INACTIVITY_TIMEOUT_MS) {
+                        console.log(`[INACTIVITY] Game ${gameId} inactive for ${Math.floor(timeElapsed / 1000)}s. Attempting to delete.`);
+                        deleteGameAndReset(false); // Reinici automàtic
+                        return; // Stop processing the snapshot, we are resetting
+                    }
+                    // === FI NOU ===
+
                     console.log(`[SNAPSHOT] Game state updated for ID: ${gameId}, Status: ${gameState.status}`);
                     renderGame(gameState);
                 } else {
                     console.error(`[SNAPSHOT ERROR] Partida ${gameId} ja no existeix. Tornant al Lobby.`);
-                    // Case 1: Game document was deleted (e.g., by another player or server cleanup)
                     resetLobbyState("La partida ha estat eliminada del servidor (Firestore). Torna a crear o unir-te.");
                 }
             }, (error) => {
                 console.error("Error en onSnapshot (connexió perduda):", error);
-                // Case 2: Real-time connection error (e.g., network timeout, permission issue)
                 resetLobbyState("Error de connexió en temps real. Torna a intentar d'unir-te. (Revisa la teva connexió)");
             });
         };
 
-        // Nova funció per reiniciar l'estat local i forçar el renderitzat del Lobby
         const resetLobbyState = (message = "L'estat de connexió s'ha netejat. Torna a unir-te o crea una nova partida.") => {
             console.log("[LOBBY] Reiniciant estat local.");
             if (unsubscribeGame) {
@@ -406,10 +521,12 @@
             heldSource = null;
             floatingCardElement.classList.remove('active');
             document.getElementById('game-id-value').textContent = 'N/A'; // Clear debug panel
+            // Reinicia els controls de so/vibració
+            lastTurnProcessed = null;
+            lastWinProcessed = null;
             renderLobby(message);
         };
 
-        // PERSISTÈNCIA DEL NOM: Guarda el nom al localStorage
         const validatePlayerName = (name) => {
             const trimmedName = name.trim();
             if (trimmedName.length < 2 || trimmedName.length > 15) {
@@ -421,13 +538,15 @@
         }
 
         const createGame = async (numPlayers, rawPlayerName) => {
+            // Inicialitza l'àudio amb la primera interacció (necessari per al navegador)
+            initAudio(); 
+            
             const createButton = event.currentTarget;
             const originalText = createButton.innerHTML;
             
             const playerName = validatePlayerName(rawPlayerName);
-            if (!playerName || numPlayers < 2 || numPlayers > 4) return; // Validation failed
+            if (!playerName || numPlayers < 2 || numPlayers > 4) return;
             
-            // Set loading state *after* successful validation
             createButton.disabled = true;
             createButton.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Creant...`;
             lucide.createIcons();
@@ -473,22 +592,20 @@
                 discardPile: [],
                 turn: null, 
                 messages: [`${newPlayer.name} ha creat la partida.`],
-                lastUpdate: Date.now()
+                lastUpdate: Date.now(), // Timestamp inicial per inactivitat
+                beepTrigger: null 
             };
 
             try {
                 const newGameRef = getGameRef(uniqueId);
                 await setDoc(newGameRef, newGameData);
                 console.log(`[CREATE] Partida ${uniqueId} creada amb èxit.`);
-                // Start listening immediately upon creation success
                 startListeningToGame(uniqueId);
             } catch (error) {
                 console.error("Error creant la partida (REQUEREIX REVISIÓ DE REGLES):", error);
                 showModal("Error", "No s'ha pogut crear la partida. Assegura't de tenir connexió a internet i que les regles de seguretat ho permetin.");
-                resetLobbyState(); // Ensures lobby is re-rendered with error message
+                resetLobbyState();
             } finally {
-                // If resetLobbyState was NOT called (i.e., startListeningToGame succeeded), 
-                // the UI will transition away from the lobby, so no need to reset button.
                 if (!gameId) {
                      createButton.disabled = false;
                      createButton.innerHTML = originalText;
@@ -497,19 +614,18 @@
         };
 
         const joinGame = async (gameIdToJoin, rawPlayerName) => {
+            // Inicialitza l'àudio amb la primera interacció (necessari per al navegador)
+            initAudio(); 
+            
             const joinButton = document.getElementById('join-button');
             
-            // 1. Initial validation
             const playerName = validatePlayerName(rawPlayerName);
             const trimmedId = gameIdToJoin.trim();
-            if (!playerName) return; // Name error already handled by modal in validatePlayerName
-            
-            if (!trimmedId || trimmedId.length !== 4 || isNaN(trimmedId)) {
-                showModal("Error", "Introdueix una ID de partida vàlida de 4 dígits.");
+            if (!playerName || !trimmedId || trimmedId.length !== 4 || isNaN(trimmedId)) {
+                if (playerName) showModal("Error", "Introdueix una ID de partida vàlida de 4 dígits.");
                 return;
             }
             
-            // Set loading state *after* successful validation
             joinButton.disabled = true;
             joinButton.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Carregant...`;
             lucide.createIcons(); 
@@ -517,35 +633,23 @@
             const gameRef = getGameRef(trimmedId);
 
             try {
-                console.log(`[JOIN] Attempting to join game ID: ${trimmedId}`);
-                
                 const gameDoc = await getDoc(gameRef);
                 
-                if (!gameDoc.exists()) {
-                    console.error(`[JOIN ERROR] Game ID ${trimmedId} not found.`);
-                    throw new Error("La partida no existeix (Codi incorrecte)."); 
-                }
+                if (!gameDoc.exists()) throw new Error("La partida no existeix (Codi incorrecte)."); 
 
                 const game = gameDoc.data();
                 
                 if (game.playerIds.includes(userId)) {
-                    // Reconnection case: user already in the game
-                    console.log(`[JOIN] User ${userId} already in game. Reconnecting.`);
                     startListeningToGame(trimmedId);
                     return; 
                 }
 
-                // Joining case: use transaction to add player
                 await runTransaction(db, async (transaction) => {
                     const gameDocInTx = await transaction.get(gameRef);
                     const gameInTx = gameDocInTx.data(); 
                     
-                    if (gameInTx.status !== 'lobby') {
-                        throw new Error("La partida ja ha començat.");
-                    }
-                    if (gameInTx.playerIds.length >= gameInTx.numPlayers) {
-                        throw new Error("La partida està plena.");
-                    }
+                    if (gameInTx.status !== 'lobby') throw new Error("La partida ja ha començat.");
+                    if (gameInTx.playerIds.length >= gameInTx.numPlayers) throw new Error("La partida està plena.");
                     
                     const newPlayer = {
                         id: userId,
@@ -567,27 +671,19 @@
                         messages: arrayUnion(`${newPlayer.name} s'ha unit.`),
                         lastUpdate: Date.now()
                     });
-                    console.log(`[JOIN SUCCESS] Transaction committed.`);
-
                 });
                 
-                // If transaction succeeds, start listening
                 startListeningToGame(trimmedId);
 
             } catch (error) {
-                console.error("=================================================");
-                console.error("[!!! REQUERIT PER AL DIAGNÒSTIC !!!] Error unint-se a la partida (REQUEREIX REVISIÓ DE REGLES):", error);
-                console.error("=================================================");
-                // Specific error messages for the user
+                console.error("[!!! REQUERIT PER AL DIAGNÒSTIC !!!] Error unint-se a la partida:", error);
                 let msg = error.message.includes("document does not exist") ? "La partida no existeix (Codi incorrecte)." : error.message;
-                // Check for generic Firebase permission error and provide a specific user message
                 if (error.code === 'permission-denied' || error.message.includes('permissions')) {
                      msg = "Permisos Insuficients: Assegura't que has publicat les regles de seguretat més recents a Firebase!";
                 }
                 showModal("Error d'Unió", `No s'ha pogut unir a la partida: ${msg}.`);
-                resetLobbyState(); // Ensure UI state is clean after failure
+                resetLobbyState();
             } finally {
-                // Ensure button resets if connection was NOT successful
                 if (!gameId) { 
                     joinButton.disabled = false;
                     joinButton.innerHTML = `Unir-se`;
@@ -598,7 +694,7 @@
         const startGame = async () => {
             if (!gameState || gameState.status !== 'lobby' || gameState.playerIds.length < 2) return;
             
-            // Nova validació: Assegurar-se que el nombre de jugadors actuals coincideix amb la mida màxima de la partida
+            // VALIDACIÓ CLAU: Assegurar-se que el nombre de jugadors actuals coincideix amb la mida màxima
             if (gameState.players.length !== gameState.numPlayers) {
                  showModal("❌ Partida Incompleta", `Encara falten ${gameState.numPlayers - gameState.players.length} jugadors per unir-se a la partida de ${gameState.numPlayers}.`);
                  return;
@@ -697,6 +793,7 @@
                         updateData.discardPile = game.discardPile; 
                     }
                     
+                    updateData.lastUpdate = Date.now(); // Actualitza timestamp
                     transaction.update(gameRef, updateData);
                 });
                 
@@ -708,7 +805,6 @@
                 floatingCardElement.classList.add('active');
 
                 if (source === 'draw') {
-                    console.log(`[DRAW] Carta ${cardValue} agafada del munt.`);
                     // The button will be shown in renderGame's action area update
                 } else {
                     const messageElement = document.getElementById('action-area');
@@ -748,7 +844,7 @@
                         discardPile: game.discardPile,
                         turn: nextTurnId,
                         messages: arrayUnion(`${getMyPlayer().name} ha descartat immediatament la carta ${cardToDiscard}.`),
-                        lastUpdate: Date.now()
+                        lastUpdate: Date.now() // Actualitza timestamp
                     });
                 });
                 heldCard = null;
@@ -816,7 +912,7 @@
                         status: status,
                         winnerId: winnerId || game.winnerId || null,
                         messages: arrayUnion(`${currentPlayer.name} ha reemplaçat la ranura ${slotIndex + 1} (${cardToDiscard}) per la carta ${newCard}.`),
-                        lastUpdate: Date.now()
+                        lastUpdate: Date.now() // Actualitza timestamp
                     });
                 });
                 
@@ -830,6 +926,32 @@
                 showModal("Error", "No s'ha pogut reemplaçar la carta. Torna a intentar-ho.");
             }
         };
+
+        const triggerRemoteBeep = async (targetId) => {
+            if (!gameId || gameState.status !== 'playing') return showModal("❌ Acció Invàlida", "El joc no està en curs.");
+            if (targetId !== gameState.turn) return showModal("❌ Acció Invàlida", "Això només funciona per al jugador del torn actual.");
+            
+            // Límita l'acció globalment per evitar abusos
+            if (gameState.beepTrigger && (Date.now() - gameState.beepTrigger.timestamp < 5000)) {
+                return showModal("⏳ Espera", "Si us plau, espera 5 segons abans de tornar a alertar el jugador.");
+            }
+
+            try {
+                await updateDoc(getGameRef(gameId), {
+                    beepTrigger: {
+                        targetId: targetId,
+                        timestamp: Date.now()
+                    },
+                    lastUpdate: Date.now() // Actualitza timestamp
+                });
+                console.log(`[BEEP] Beep trigger sent to ${targetId}`);
+                showModal("Alerta Enviada", "S'ha enviat un 'beep' al dispositiu del jugador actiu.");
+            } catch (error) {
+                console.error("Error triggerant el beep remot:", error);
+                showModal("Error de Beep", "No s'ha pogut enviar l'alerta de so.");
+            }
+        };
+
 
         const getNextPlayerId = (game) => {
             const playerIds = game.playerIds;
@@ -902,7 +1024,7 @@
                         turn: nextTurnId,
                         winnerId: gameWinner ? gameWinner.id : null,
                         messages: arrayUnion(`La mà ha acabat. Punts de ronda assignats. Comença la nova mà ${gameWinner ? '(FINALITZADA)' : ''}.`),
-                        lastUpdate: Date.now()
+                        lastUpdate: Date.now() // Actualitza timestamp
                     });
                 });
                 
@@ -917,18 +1039,58 @@
         const getMyPlayer = () => gameState?.players.find(p => p.id === userId);
         const isMyTurn = () => gameState?.turn === userId;
 
+        // Funció per mostrar el modal (actualitzada per a confirmació)
+        const showModal = (title, message, onConfirm = null) => {
+            const modal = document.getElementById('custom-modal');
+            const confirmBtn = document.getElementById('modal-confirm-btn');
+            const closeBtn = document.getElementById('modal-close-btn');
+            
+            document.getElementById('modal-title').innerHTML = title;
+            document.getElementById('modal-message').innerHTML = message;
+            
+            if (onConfirm) {
+                // Mode de confirmació (per a Host Reset)
+                confirmBtn.classList.remove('hidden');
+                confirmBtn.onclick = () => {
+                    closeModal();
+                    onConfirm();
+                };
+                closeBtn.textContent = "Cancel·lar";
+                document.getElementById('modal-title').classList.add('text-red-600');
+
+            } else {
+                // Mode d'alerta simple
+                confirmBtn.classList.add('hidden');
+                closeBtn.textContent = "Entès";
+                document.getElementById('modal-title').classList.remove('text-red-600');
+            }
+            
+            modal.classList.remove('hidden');
+        };
+
+        const closeModal = () => {
+            document.getElementById('custom-modal').classList.add('hidden');
+        };
+
+        // Funció per embolicar el deleteGameAndReset amb confirmació
+        const confirmReset = () => {
+            showModal(
+                "⚠️ Confirmació de Reinici", 
+                "Estàs segur que vols eliminar permanentment aquesta partida de Firebase? Això farà que **tots els jugadors** tornin al Lobby i es perdrà tot el progrés. Aquesta acció és irreversible.",
+                () => deleteGameAndReset(true) // Passar true per indicar reinici manual
+            );
+        };
+
+
         const renderLobby = (message = "") => {
-            // Assegurar-se que la carta flotant estigui desactivada
             heldCard = null;
             floatingCardElement.classList.remove('active');
 
-            // If the user is somehow in a game state but renderLobby is called, don't proceed.
             if (gameId && gameState) {
                  console.warn("Attempted to render Lobby while connected to a game. Skipping.");
                  return;
             }
             
-            // Càrrega del nom guardat
             const savedName = localStorage.getItem('racko_player_name') || '';
 
             document.getElementById('game-status').innerHTML = `<span class="text-xl font-bold text-gray-800">Sala d'Espera</span>`;
@@ -962,13 +1124,12 @@
                     <!-- BOTÓ DE REINICIAR LOBBY -->
                     <div class="mt-6 border-t pt-4">
                         <button onclick="window.gameFunctions.resetLobbyState()" class="w-full py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition duration-300 flex items-center justify-center">
-                            <i data-lucide="rotate-ccw" class="w-4 h-4 mr-2"></i> Reiniciar Connexió
+                            <i data-lucide="rotate-ccw" class="w-4 h-4 mr-2"></i> Reiniciar Connexió Local
                         </button>
                     </div>
 
                 </div>
             `;
-            // Assegura't que l'àrea de joc activa estigui oculta
             document.getElementById('game-active-area').classList.add('hidden');
             document.getElementById('custom-modal').classList.add('hidden'); 
             lucide.createIcons();
@@ -979,17 +1140,12 @@
             const myPlayer = getMyPlayer();
 
             // 1. CRITICAL CHECK for Data Integrity and Synchronization
-            
-            // Check if user is known to the game (their ID is in the list)
             if (!game.playerIds.includes(userId)) {
-                // If we are listening to a game but are not listed as a player, something is deeply wrong. Reset.
                 if (gameId) resetLobbyState("Error de Sincronització: El teu ID no es troba a la llista de jugadors. S'ha restablert la connexió.");
                 return;
             }
 
-            // CRITICAL CHECK for Active Game State: If status is NOT lobby, the player object *must* exist.
             if (!myPlayer && game.status !== 'lobby') {
-                // This indicates a critical data error (player object vanished mid-game). Aggressive reset needed.
                 console.error(`[RENDER ERROR] CRITICAL: Player ${userId} not found in the game object while game is active (${game.status}).`);
                 let errorMessage = `<p class="text-xl text-red-600 font-semibold">Error de sincronització crític. Partida activa (${game.status}) sense el teu objecte de jugador. Esborrant l'estat local.</p>`;
                 container.innerHTML = errorMessage;
@@ -1001,15 +1157,12 @@
             if (game.status === 'lobby') {
                 document.getElementById('game-active-area').classList.add('hidden');
                 document.getElementById('game-container').innerHTML = ''; 
-                // We proceed even if myPlayer is null (race condition after joining) because renderLobbyContent 
-                // is designed to render based on game.players/playerIds and we are expecting an update soon.
                 renderLobbyContent(game);
                 return;
             }
             
             // 3. Handle Active Game States (Playing, Finished Hand, Finished Game)
             
-            // If we reach here, myPlayer is guaranteed not null, and status is active.
             document.getElementById('game-active-area').classList.remove('hidden');
             document.getElementById('game-container').innerHTML = '';
             
@@ -1025,7 +1178,50 @@
             const isFinishedGame = game.status === 'finished';
             const isCurrentTurn = isMyTurn() && !isFinishedHand && !isFinishedGame;
 
-            // 1. Renderitzat de l'Estat de la Partida i Informació del Jugador (Status Bar)
+
+            // 4. GESTIÓ DE SO i VIBRACIÓ (Nova Funcionalitat de Notificacions)
+            
+            // A. Trigger Remot (Beep quan altres jugadors cliquen el teu nom)
+            const handleBeepTrigger = async () => {
+                if (game.beepTrigger && game.beepTrigger.targetId === userId) {
+                    const triggerTime = game.beepTrigger.timestamp;
+                    
+                    // Si el trigger és nou (fins i tot amb latència, 2s és segur)
+                    if (Date.now() - triggerTime < 2000) { 
+                        playBeep();
+                        vibrate([100, 50, 100]); // Vibració específica per alerta remota
+                        
+                        // Esborra el trigger immediatament per evitar repetir el so en el següent snapshot
+                        try {
+                            // No actualitzem lastUpdate aquí, ja que no és una acció de joc
+                            await updateDoc(getGameRef(gameId), { beepTrigger: null }); 
+                        } catch (err) {
+                            console.error("Error netejant beepTrigger", err);
+                        }
+                    }
+                }
+            };
+            handleBeepTrigger();
+
+            // B. Alerta de Torn (Controlat per lastTurnProcessed per sonar una sola vegada)
+            if (isCurrentTurn && game.turn !== lastTurnProcessed) {
+                playBeep();
+                vibrate([300, 100, 300]); // Vibració llarga per torn propi
+                lastTurnProcessed = game.turn;
+            } else if (!isCurrentTurn && game.turn !== lastTurnProcessed) {
+                lastTurnProcessed = game.turn; // Actualitza l'estat per altres jugadors
+            }
+
+            // C. Alerta de Victòria/Final (Controlat per lastWinProcessed)
+            if ((isFinishedHand || isFinishedGame) && game.status !== lastWinProcessed) {
+                playWinMelody();
+                vibrate([500, 200, 500]); // Vibració de celebració
+                lastWinProcessed = game.status;
+            } else if (!isFinishedHand && !isFinishedGame && game.status !== lastWinProcessed) {
+                lastWinProcessed = game.status;
+            }
+            
+            // 5. Renderitzat de l'Estat de la Partida i Informació del Jugador (Status Bar)
             let statusText = '';
             let statusColor = '';
             if (isFinishedGame) {
@@ -1044,7 +1240,7 @@
             document.getElementById('game-status').innerHTML = `<span class="px-4 py-2 rounded-full font-bold ${statusColor} text-sm">${statusText}</span>`;
 
 
-            // 2. Renderitzat del Tauler de Joc (Deck & Discard)
+            // 6. Renderitzat del Tauler de Joc (Deck & Discard)
             const deckContent = game.deck.length > 0 ? `<div class="card-back flex items-center justify-center rounded-lg w-full h-full text-2xl" onclick="${isCurrentTurn && !heldCard ? 'window.gameFunctions.handleDrawCard(\'draw\')' : ''}">
                 <i data-lucide="layers"></i>
             </div>` : `<div class="flex items-center justify-center w-full h-full text-lg text-gray-500">Buit</div>`;
@@ -1058,7 +1254,7 @@
             document.getElementById('discard-pile').className = `w-20 h-32 border-4 border-gray-400 rounded-lg transition duration-200 ${discardClickableClass}`;
 
 
-            // 3. Botó d'acció/Estat del joc
+            // 7. Botó d'acció/Estat del joc
             let actionHtml = '';
             
             if (isFinishedHand && game.winnerId === userId) {
@@ -1093,22 +1289,28 @@
             }
             document.getElementById('action-area').innerHTML = actionHtml;
             
-            // 4. Renderitzat de l'Atril (Rack)
+            // 8. Renderitzat de l'Atril (Rack)
             renderRack();
 
-            // 5. Renderitzat de les Puntuacions Global
+            // 9. Renderitzat de les Puntuacions Global (Amb Clicable Remot)
             document.getElementById('all-players-score').innerHTML = game.players
                 .map(p => {
                     const isLocalPlayer = p.id === userId;
                     const isPlayerTurn = p.id === game.turn;
                     const cardClasses = isLocalPlayer ? 'bg-indigo-100 border-indigo-500' : 'bg-gray-100 border-gray-300';
-                    const turnRing = isPlayerTurn ? 'ring-4 ring-yellow-500' : '';
+                    
+                    // Condicions per fer clic: És el torn del jugador, però NO sóc jo
+                    const canRemoteBeep = isPlayerTurn && !isLocalPlayer;
+                    
+                    const turnRing = isPlayerTurn ? 'ring-4 ring-yellow-500' : ''; 
+                    const clickClasses = canRemoteBeep ? 'hover:ring-8 transition duration-150 cursor-pointer' : 'cursor-default';
+                    const clickAction = canRemoteBeep ? `onclick="window.gameFunctions.triggerRemoteBeep('${p.id}')"` : '';
 
                     return `
-                        <div class="p-3 rounded-xl border-2 shadow-sm ${cardClasses} ${turnRing} transition duration-300">
+                        <div class="p-3 rounded-xl border-2 shadow-sm ${cardClasses} ${turnRing} ${clickClasses}" ${clickAction}>
                             <p class="font-bold text-lg flex items-center">
                                 ${p.name} ${isLocalPlayer ? ' (Tu)' : ''}
-                                ${isPlayerTurn ? '<i data-lucide="star" class="w-4 h-4 ml-2 text-yellow-600 fill-yellow-400"></i>' : ''}
+                                ${canRemoteBeep ? '<i data-lucide="volume-2" class="w-4 h-4 ml-2 text-yellow-600"></i>' : (isPlayerTurn ? '<i data-lucide="star" class="w-4 h-4 ml-2 text-yellow-600 fill-yellow-400"></i>' : '')}
                             </p>
                             <p class="text-sm text-gray-800 font-semibold">Puntuació Total: <span class="text-xl text-indigo-700">${p.score}</span></p>
                             <p class="text-xs text-gray-500">Última Puntuació: +${p.scoreHistory[p.scoreHistory.length - 1] || 0}</p>
@@ -1116,29 +1318,23 @@
                     `;
                 }).join('');
 
-            // 6. Actualitzar botó de descart immediat si l'estat local ho requereix
+            // 10. Actualitzar botó de descart immediat i icones
             if (isCurrentTurn && heldCard && heldSource === 'draw' && game.status === 'playing') {
                 document.getElementById('discard-immediate-btn')?.classList.remove('hidden');
             }
 
-            // 7. Actualitzar icones (després de canviar el DOM)
             lucide.createIcons();
         };
 
-        // Funció per a renderitzar el contingut del Lobby (separada de renderGame)
         const renderLobbyContent = (game) => {
             const container = document.getElementById('game-container');
             const myPlayer = getMyPlayer();
             
-            // Check if myPlayer is null (race condition or critical error)
-            // If myPlayer is null, we assume the user's ID is correct but the object is pending sync.
-            // We use the first player as the creator, as the current user might not be in the list yet.
             const creator = game.players[0];
             const isCreator = myPlayer ? myPlayer.id === creator.id : false;
             
             let playerListHtml = game.players.map(p => `<span class="font-semibold ${p.id === userId ? 'text-indigo-600' : 'text-gray-800'}">${p.name} ${p.id === creator.id ? '(Creador)' : ''}</span>`).join(', ');
 
-            // Comprovació de la validació completa per al botó d'inici
             const isLobbyFull = game.players.length === game.numPlayers;
             
             let actionHtml = `<div class="p-6 bg-white rounded-xl shadow-lg w-full max-w-lg mx-auto border-t-4 border-blue-500">
@@ -1147,15 +1343,21 @@
                 <p class="text-sm text-gray-700">Jugadors connectats: ${game.players.length} de ${game.numPlayers}.</p>
                 <p class="text-sm text-gray-700 mt-2">Jugadors: ${playerListHtml}</p>
                 ${isLobbyFull ? 
-                    `<p class="text-sm text-green-700 mt-2 font-bold">Lobby complet (${game.numPlayers}/${game.numPlayers}).</p>` : 
+                    `<p class="text-sm text-green-700 mt-2 font-bold">Lobby complet (${game.players.length}/${game.numPlayers}).</p>` : 
                     `<p class="text-sm text-gray-700 mt-2">Esperant ${game.numPlayers - game.players.length} jugadors més per unir-se...</p>`
                 }
-                ${isCreator && isLobbyFull ? `
-                    <button onclick="window.gameFunctions.startGame()" class="w-full py-3 mt-4 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition duration-300 flex items-center justify-center">
-                        <i data-lucide="play" class="mr-2"></i> Iniciar Partida
+                ${isCreator ? `
+                    ${isLobbyFull ? `
+                        <button onclick="window.gameFunctions.startGame()" class="w-full py-3 mt-4 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition duration-300 flex items-center justify-center">
+                            <i data-lucide="play" class="mr-2"></i> Iniciar Partida
+                        </button>
+                    ` : `
+                        <p class="mt-4 text-center text-red-600 font-semibold">Esperant que tots els jugadors (${game.numPlayers}) s'uneixin per iniciar la partida.</p>
+                    `}
+                    <!-- NOU BOTÓ DE REINICIAR (HOST ONLY) -->
+                    <button onclick="window.gameFunctions.confirmReset()" class="w-full py-2 mt-4 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 transition duration-300 flex items-center justify-center">
+                        <i data-lucide="alert-triangle" class="w-4 h-4 mr-2"></i> Reiniciar Registre de Partida (Host)
                     </button>
-                ` : isCreator ? `
-                    <p class="mt-4 text-center text-red-600 font-semibold">Esperant que tots els jugadors (${game.numPlayers}) s'uneixin per iniciar la partida.</p>
                 ` : `<p class="mt-4 text-center text-gray-600">Esperant que el creador de la partida (${creator.name}) l'iniciï quan estigui completa.</p>`}
             </div>`;
             
@@ -1166,7 +1368,6 @@
         const renderRack = () => {
             if (!gameState) return;
             const myPlayer = getMyPlayer();
-            // Aquesta funció només es crida des d'un estat actiu, on myPlayer és garantit (vegeu renderGame)
             if (!myPlayer) return; 
 
             const rackElement = document.getElementById('my-rack');
@@ -1199,17 +1400,6 @@
             }).join('');
         };
 
-        const showModal = (title, message) => {
-            const modal = document.getElementById('custom-modal');
-            document.getElementById('modal-title').innerHTML = title;
-            document.getElementById('modal-message').innerHTML = message;
-            modal.classList.remove('hidden');
-        };
-
-        const closeModal = () => {
-            document.getElementById('custom-modal').classList.add('hidden');
-        };
-
         // Exportar funcions de joc a la finestra per a l'HTML
         window.gameFunctions = {
             createGame: (num, name) => createGame(num, name),
@@ -1220,6 +1410,9 @@
             handleDiscardImmediate,
             endHandAndScore,
             resetLobbyState: () => resetLobbyState(), // Export without message for UI button
+            triggerRemoteBeep, 
+            deleteGameAndReset, // Exportació del reinici forçat
+            confirmReset, // Exportació del modal de confirmació
             closeModal
         };
 
