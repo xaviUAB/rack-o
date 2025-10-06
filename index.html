@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rack-O Game: Multijugador</title>
+    <title>Rack-O Multijugador v 1.2.</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inclou les icones Lucide -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -597,6 +597,12 @@
 
         const startGame = async () => {
             if (!gameState || gameState.status !== 'lobby' || gameState.playerIds.length < 2) return;
+            
+            // Nova validació: Assegurar-se que el nombre de jugadors actuals coincideix amb la mida màxima de la partida
+            if (gameState.players.length !== gameState.numPlayers) {
+                 showModal("❌ Partida Incompleta", `Encara falten ${gameState.numPlayers - gameState.players.length} jugadors per unir-se a la partida de ${gameState.numPlayers}.`);
+                 return;
+            }
 
             try {
                 await runTransaction(db, async (transaction) => {
@@ -971,30 +977,41 @@
         const renderGame = (game) => {
             const container = document.getElementById('game-container');
             const myPlayer = getMyPlayer();
+
+            // 1. CRITICAL CHECK for Data Integrity and Synchronization
             
-            // Critical check for player existence
-            if (!myPlayer) {
-                console.error(`[RENDER ERROR] Player ${userId} not found in the game object.`);
-                let errorMessage = `<p class="text-xl text-red-600 font-semibold">Error de sincronització crític. Intenta ${gameId} unir-te de nou o ${game.playerIds.includes(userId) ? 'contacta amb el suport' : 'crea una nova partida'}.</p>`;
+            // Check if user is known to the game (their ID is in the list)
+            if (!game.playerIds.includes(userId)) {
+                // If we are listening to a game but are not listed as a player, something is deeply wrong. Reset.
+                if (gameId) resetLobbyState("Error de Sincronització: El teu ID no es troba a la llista de jugadors. S'ha restablert la connexió.");
+                return;
+            }
+
+            // CRITICAL CHECK for Active Game State: If status is NOT lobby, the player object *must* exist.
+            if (!myPlayer && game.status !== 'lobby') {
+                // This indicates a critical data error (player object vanished mid-game). Aggressive reset needed.
+                console.error(`[RENDER ERROR] CRITICAL: Player ${userId} not found in the game object while game is active (${game.status}).`);
+                let errorMessage = `<p class="text-xl text-red-600 font-semibold">Error de sincronització crític. Partida activa (${game.status}) sense el teu objecte de jugador. Esborrant l'estat local.</p>`;
                 container.innerHTML = errorMessage;
-                // If we are listening but the player object is missing, reset state
-                if (gameId) resetLobbyState("Error: No es troba el teu jugador a la partida. S'ha restablert la connexió. Podras provar d'unir-te amb el mateix ID de partida.");
+                if (gameId) resetLobbyState("Error crític: El teu objecte de jugador ha desaparegut en una partida activa. S'ha restablert la connexió.");
                 return;
             }
             
-            // UPDATE DEBUG PANEL: Show Active Game ID
-            document.getElementById('game-id-value').textContent = gameId;
-
-            // Clear UI if we were previously in the lobby, or re-render lobby if status is lobby
+            // 2. Handle Lobby State
             if (game.status === 'lobby') {
                 document.getElementById('game-active-area').classList.add('hidden');
                 document.getElementById('game-container').innerHTML = ''; 
+                // We proceed even if myPlayer is null (race condition after joining) because renderLobbyContent 
+                // is designed to render based on game.players/playerIds and we are expecting an update soon.
                 renderLobbyContent(game);
                 return;
-            } else {
-                document.getElementById('game-active-area').classList.remove('hidden');
-                document.getElementById('game-container').innerHTML = '';
             }
+            
+            // 3. Handle Active Game States (Playing, Finished Hand, Finished Game)
+            
+            // If we reach here, myPlayer is guaranteed not null, and status is active.
+            document.getElementById('game-active-area').classList.remove('hidden');
+            document.getElementById('game-container').innerHTML = '';
             
             // Set floating card state
             if (heldCard) {
@@ -1113,30 +1130,33 @@
             const container = document.getElementById('game-container');
             const myPlayer = getMyPlayer();
             
-            // If myPlayer is null, something went wrong, let the main renderGame handle the error
-            if (!myPlayer) return; 
-
+            // Check if myPlayer is null (race condition or critical error)
+            // If myPlayer is null, we assume the user's ID is correct but the object is pending sync.
+            // We use the first player as the creator, as the current user might not be in the list yet.
             const creator = game.players[0];
-            const isCreator = myPlayer.id === creator.id;
+            const isCreator = myPlayer ? myPlayer.id === creator.id : false;
             
-            let playerListHtml = game.players.map(p => `<span class="font-semibold ${p.id === myPlayer.id ? 'text-indigo-600' : 'text-gray-800'}">${p.name} ${p.id === creator.id ? '(Creador)' : ''}</span>`).join(', ');
+            let playerListHtml = game.players.map(p => `<span class="font-semibold ${p.id === userId ? 'text-indigo-600' : 'text-gray-800'}">${p.name} ${p.id === creator.id ? '(Creador)' : ''}</span>`).join(', ');
 
+            // Comprovació de la validació completa per al botó d'inici
+            const isLobbyFull = game.players.length === game.numPlayers;
+            
             let actionHtml = `<div class="p-6 bg-white rounded-xl shadow-lg w-full max-w-lg mx-auto border-t-4 border-blue-500">
                 <p class="text-xl font-bold mb-4 text-blue-700">Esperant a la Sala d'Espera</p>
                 <p class="text-lg font-bold text-gray-800 mb-2">Codi de Partida (4 Dígits) per Compartir: <span class="text-3xl font-extrabold select-all text-red-600 bg-red-100 p-1 rounded">${gameId}</span></p>
-                <p class="text-sm text-gray-700">Jugadors connectats: ${game.playerIds.length} de ${game.numPlayers}.</p>
+                <p class="text-sm text-gray-700">Jugadors connectats: ${game.players.length} de ${game.numPlayers}.</p>
                 <p class="text-sm text-gray-700 mt-2">Jugadors: ${playerListHtml}</p>
-                ${game.playerIds.length < game.numPlayers ? 
-                    `<p class="text-sm text-gray-700 mt-2">Esperant ${game.numPlayers - game.playerIds.length} jugadors més per començar la partida de ${game.numPlayers} jugadors.</p>` : 
-                    `<p class="text-sm text-green-700 mt-2 font-bold">Lobby complet (${game.numPlayers}/${game.numPlayers}).</p>`
+                ${isLobbyFull ? 
+                    `<p class="text-sm text-green-700 mt-2 font-bold">Lobby complet (${game.numPlayers}/${game.numPlayers}).</p>` : 
+                    `<p class="text-sm text-gray-700 mt-2">Esperant ${game.numPlayers - game.players.length} jugadors més per unir-se...</p>`
                 }
-                ${isCreator && game.playerIds.length >= 2 ? `
+                ${isCreator && isLobbyFull ? `
                     <button onclick="window.gameFunctions.startGame()" class="w-full py-3 mt-4 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition duration-300 flex items-center justify-center">
                         <i data-lucide="play" class="mr-2"></i> Iniciar Partida
                     </button>
                 ` : isCreator ? `
-                    <p class="mt-4 text-center text-red-600 font-semibold">Necessites almenys 2 jugadors per començar.</p>
-                ` : `<p class="mt-4 text-center text-gray-600">Esperant que el creador de la partida (${creator.name}) l'iniciï.</p>`}
+                    <p class="mt-4 text-center text-red-600 font-semibold">Esperant que tots els jugadors (${game.numPlayers}) s'uneixin per iniciar la partida.</p>
+                ` : `<p class="mt-4 text-center text-gray-600">Esperant que el creador de la partida (${creator.name}) l'iniciï quan estigui completa.</p>`}
             </div>`;
             
             container.innerHTML = actionHtml; 
@@ -1146,6 +1166,9 @@
         const renderRack = () => {
             if (!gameState) return;
             const myPlayer = getMyPlayer();
+            // Aquesta funció només es crida des d'un estat actiu, on myPlayer és garantit (vegeu renderGame)
+            if (!myPlayer) return; 
+
             const rackElement = document.getElementById('my-rack');
             const isCurrentTurn = isMyTurn() && gameState.status === 'playing';
             
