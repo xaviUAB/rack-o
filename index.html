@@ -699,14 +699,14 @@
         };
 
         const startGame = async () => {
-            if (!gameState || gameState.status !== 'lobby' || gameState.playerIds.length < 2) return;
-            
-            // VALIDACIÓ CLAU: Assegurar-se que el nombre de jugadors actuals coincideix amb la mida màxima
-            if (gameState.players.length !== gameState.numPlayers) {
-                 showModal("❌ Partida Incompleta", `Encara falten ${gameState.numPlayers - gameState.players.length} jugadors per unir-se a la partida de ${gameState.numPlayers}.`);
+            if (!gameState || gameState.status !== 'lobby' || gameState.playerIds.length < 2) {
+                 // Aquesta validació utilitza l'estat local per a feedback ràpid
+                 if (gameState && gameState.status === 'lobby' && gameState.playerIds.length < 2) {
+                    showModal("❌ Partida Incompleta", "Necessites almenys 2 jugadors per començar.");
+                 }
                  return;
             }
-
+            
             try {
                 await runTransaction(db, async (transaction) => {
                     const gameRef = getGameRef(gameId);
@@ -717,6 +717,13 @@
                     }
 
                     const game = gameDoc.data();
+                    
+                    // VALIDACIÓ CLAU ATÒMICA: Assegurar-se que el nombre de jugadors és correcte
+                    if (game.players.length !== game.numPlayers) {
+                         // Llença un error per forçar el rollback de la transacció
+                         throw new Error(`Partida incompleta. Falten ${game.numPlayers - game.players.length} jugadors.`);
+                    }
+
                     let fullDeck = createAndShuffleDeck(game.maxCardValue); 
                     let players = game.players;
 
@@ -759,7 +766,13 @@
                 });
             } catch (error) {
                 console.error("Error iniciant la partida:", error);
-                showModal("Error", `No s'ha pogut iniciar la partida: ${error.message}`);
+                
+                // Si l'error és la nostra validació atòmica, mostrem un missatge més amigable
+                if (error.message.includes('Partida incompleta')) {
+                     showModal("❌ Partida Incompleta", `No s'ha pogut iniciar la partida. ${error.message}. Assegura't que TOTS els jugadors s'han unit.`);
+                } else {
+                    showModal("Error", `No s'ha pogut iniciar la partida: ${error.message}`);
+                }
             }
         };
 
