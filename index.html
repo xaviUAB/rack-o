@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rack-O Game: Multijugador...</title>
+    <title>Rack-O Game: Multijugador</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inclou les icones Lucide -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -372,6 +372,15 @@
                 [newDeck[i], newDeck[j]] = [newDeck[j], newDeck[i]];
             }
             return newDeck;
+        };
+
+        // NOU: Funció per barrejar un array existent (Fisher-Yates)
+        const shuffleArray = (array) => {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
         };
 
         const checkAscendingOrder = (rack) => {
@@ -786,7 +795,7 @@
                 }
                 return;
             }
-            if (source === 'draw' && gameState.deck.length === 0) return showModal("❌ Baralla Buida", "No queden cartes al munt.");
+            // Eliminem la comprovació prematura de munt buit; ara es gestiona a la transacció.
             if (source === 'discard' && gameState.discardPile.length === 0) return showModal("❌ Descart Buida", "La pila de descarts està buida.");
             
             let cardValue = null;
@@ -795,33 +804,55 @@
                 await runTransaction(db, async (transaction) => {
                     const gameRef = getGameRef(gameId);
                     const gameDoc = await transaction.get(gameRef);
-                    const game = gameDoc.data();
+                    let game = gameDoc.data(); // 'let' per permetre modificació
                     
                     if (game.turn !== userId) throw new Error("Ja no és el teu torn.");
 
+                    let newMessages = [];
+
+                    // NOU: Lògica per barrejar si el munt està buit
+                    if (source === 'draw' && game.deck.length === 0) {
+                        console.log("[RESHUFFLE] Munt buit. Intentant barrejar descarts.");
+                        
+                        if (game.discardPile.length <= 1) {
+                            throw new Error("No queden cartes per agafar ni al munt ni per barrejar des dels descarts.");
+                        }
+
+                        const topDiscardCard = game.discardPile.pop();
+                        let cardsToReshuffle = game.discardPile;
+
+                        // Actualitzem l'estat del joc DINS de la variable 'game' per a la transacció
+                        game.deck = shuffleArray(cardsToReshuffle);
+                        game.discardPile = [topDiscardCard];
+                        newMessages.push("El munt s'ha quedat buit i s'ha barrejat la pila de descarts.");
+                        console.log(`[RESHUFFLE] S'han mogut ${game.deck.length} cartes al munt. La carta ${topDiscardCard} roman al descart.`);
+                    }
+
+
                     if (source === 'draw') {
                         cardValue = game.deck.pop(); 
-                        if (cardValue === undefined) throw new Error("Baralla buida.");
+                        if (cardValue === undefined) throw new Error("Baralla buida. No s'ha pogut agafar una carta després de barrejar.");
                     } else if (source === 'discard') {
                         cardValue = game.discardPile.pop();
                          if (cardValue === undefined) throw new Error("Descart buit.");
                     }
 
-                    const updateData = {};
-                    if (source === 'draw') {
-                        updateData.deck = game.deck; 
-                    } else if (source === 'discard') {
-                        updateData.discardPile = game.discardPile; 
+                    const updateData = {
+                        deck: game.deck,
+                        discardPile: game.discardPile,
+                        lastUpdate: Date.now()
+                    };
+
+                    if (newMessages.length > 0) {
+                        updateData.messages = arrayUnion(...newMessages);
                     }
                     
-                    updateData.lastUpdate = Date.now(); // Actualitza timestamp
                     transaction.update(gameRef, updateData);
                 });
                 
                 heldCard = cardValue;
                 heldSource = source;
-                // No cal renderRack aquí, ja que l'actualització es farà al renderGame des del snapshot.
-                // Però sí que cal actualitzar la carta flotant immediatament
+                // Actualitza la carta flotant immediatament
                 floatingCardValueElement.textContent = heldCard;
                 floatingCardElement.classList.add('active');
 
@@ -1506,4 +1537,5 @@
     </script>
 </body>
 </html>
+
 
