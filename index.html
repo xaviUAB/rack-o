@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rack-O Game: Multijugador</title>
+    <title>Rack-O Game: Multijugador...</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inclou les icones Lucide -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -220,6 +220,7 @@
         let gameId = null;
         let gameState = null;
         let unsubscribeGame = null;
+        let syncErrorCount = 0; // NOU: Comptador per a errors de sincronització
 
         // Estats de joc del client
         let heldCard = null; 
@@ -1162,12 +1163,20 @@
         const renderGame = (game) => {
             const container = document.getElementById('game-container');
             
-            // 1. CRITICAL CHECK for Data Integrity and Synchronization
+            // 1. CRITICAL CHECK for Data Integrity and Synchronization (WITH LATENCY TOLERANCE)
             if (!game.playerIds.includes(userId)) {
-                // SÓLAMENT ens desconnectem si el nostre ID ha desaparegut de la llista d'IDs.
-                if (gameId) resetLobbyState("Error de Sincronització: El teu ID no es troba a la llista de jugadors. S'ha restablert la connexió.");
-                return;
+                syncErrorCount++;
+                console.warn(`[SYNC WARNING] User ID ${userId} not in playerIds [${game.playerIds}]. Consecutive errors: ${syncErrorCount}.`);
+                
+                // Donem un marge d'un snapshot per si és un retard de propagació. Si persisteix, desconnectem.
+                if (syncErrorCount > 1) {
+                    if (gameId) resetLobbyState("Error de Sincronització: El teu ID no es troba a la llista de jugadors. S'ha restablert la connexió.");
+                }
+                return; // No renderitzem res si hi ha un error de sincronització pendent.
             }
+            
+            // Si la comprovació té èxit, reiniciem el comptador.
+            syncErrorCount = 0;
 
             const myPlayer = getMyPlayer();
 
@@ -1497,3 +1506,4 @@
     </script>
 </body>
 </html>
+
