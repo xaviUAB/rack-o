@@ -1161,27 +1161,36 @@
 
         const renderGame = (game) => {
             const container = document.getElementById('game-container');
-            const myPlayer = getMyPlayer();
-
+            
             // 1. CRITICAL CHECK for Data Integrity and Synchronization
             if (!game.playerIds.includes(userId)) {
+                // SÓLAMENT ens desconnectem si el nostre ID ha desaparegut de la llista d'IDs.
                 if (gameId) resetLobbyState("Error de Sincronització: El teu ID no es troba a la llista de jugadors. S'ha restablert la connexió.");
                 return;
             }
 
-            if (!myPlayer && game.status !== 'lobby') {
-                console.error(`[RENDER ERROR] CRITICAL: Player ${userId} not found in the game object while game is active (${game.status}).`);
-                let errorMessage = `<p class="text-xl text-red-600 font-semibold">Error de sincronització crític. Partida activa (${game.status}) sense el teu objecte de jugador. Esborrant l'estat local.</p>`;
-                container.innerHTML = errorMessage;
-                if (gameId) resetLobbyState("Error crític: El teu objecte de jugador ha desaparegut en una partida activa. S'ha restablert la connexió.");
-                return;
-            }
-            
+            const myPlayer = getMyPlayer();
+
             // 2. Handle Lobby State
             if (game.status === 'lobby') {
                 document.getElementById('game-active-area').classList.add('hidden');
                 document.getElementById('game-container').innerHTML = ''; 
                 renderLobbyContent(game);
+                return;
+            }
+            
+            // NOU: Sincronització de Jugador Actiu (Tolerància a la latència)
+            if (!myPlayer) {
+                // Si l'usuari és a playerIds però myPlayer és null, està esperant que la transacció de startGame es propagui
+                document.getElementById('game-active-area').classList.add('hidden');
+                document.getElementById('game-container').innerHTML = `
+                    <div class="text-center p-8 bg-blue-100 rounded-xl shadow-lg">
+                        <i data-lucide="loader-2" class="w-10 h-10 text-blue-600 inline-block animate-spin mb-4"></i>
+                        <p class="text-xl font-bold text-blue-700">Sincronitzant dades de jugador...</p>
+                        <p class="text-gray-600">La partida ha començat. Espera un moment mentre es reparteixen les cartes.</p>
+                    </div>
+                `;
+                lucide.createIcons();
                 return;
             }
             
