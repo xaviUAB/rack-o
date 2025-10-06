@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rack-O Multijugador (Català)</title>
+    <title>Rack-O Game: Multijugador</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inclou les icones Lucide -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -94,11 +94,13 @@
             <div id="game-status" class="text-sm font-semibold">Carregant...</div>
         </header>
 
-        <!-- Informació de l'Usuari -->
-        <div class="text-xs text-gray-500 mb-4 flex justify-between">
-            <span id="user-id-display">ID d'Usuari: Carregant...</span>
-            <span id="game-id-display">ID de Partida: <span id="game-id-value">N/A</span></span>
+        <!-- DEBUG & DIAGNÒSTIC (Ajudar a l'usuari a comprovar la connexió) -->
+        <div class="text-xs p-2 mb-4 bg-yellow-50 rounded-lg border border-yellow-200">
+            <h4 class="font-bold text-yellow-800 mb-1">Panell de Diagnòstic (Debug)</h4>
+            <span id="user-id-display" class="block text-gray-600">ID d'Usuari: <span class="font-mono text-xs">Carregant...</span></span>
+            <span id="game-id-display" class="block text-gray-600">ID de Partida Activa: <span id="game-id-value" class="font-bold text-red-600">N/A</span></span>
         </div>
+        <!-- Fi de DEBUG & DIAGNÒSTIC -->
 
         <!-- Àrea Principal de l'Aplicació (Lobby o Joc) -->
         <div id="main-container">
@@ -174,12 +176,45 @@
         import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, updateDoc, arrayRemove, arrayUnion, runTransaction, getDocs, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // IMPORTANT: No es pot utilitzar alert() ni confirm() en aquest entorn
+        /** * ===============================================================================
+         * Configuració Manual de Firebase per a Execució Fora de Canvas (com GitHub Pages)
+         * ===============================================================================
+         * Quan utilitzis aquest codi fora de l'entorn Canvas, NECESSITES descomentar
+         * i substituir els valors següents per la configuració real del teu projecte Firebase.
+         * Quan l'executes a Canvas, s'utilitzen les variables injectades.
+         */
+        const FIREBASE_SETTINGS = {
+            // apiKey: "LA_TEVA_API_KEY_AQUI", 
+            // authDomain: "EL_TEU_DOMINI_AUTH_AQUI",
+            // projectId: "EL_TEU_PROJECT_ID_AQUI",
+            // storageBucket: "EL_TEU_STORAGE_BUCKET_AQUI",
+            // messagingSenderId: "EL_TEU_MESSAGING_SENDER_ID_AQUI",
+            // appId: "EL_TEU_APP_ID_AQUI"
+            // Import the functions you need from the SDKs you need
+
+  apiKey: "AIzaSyDQWCvBru356guXE3tAB6R2VjOsqaFHttY",
+  authDomain: "rack-o-16931.firebaseapp.com",
+  projectId: "rack-o-16931",
+  storageBucket: "rack-o-16931.firebasestorage.app",
+  messagingSenderId: "127219641303",
+  appId: "1:127219641303:web:285e63d0bfecb9da4db992",
+  
+};
+
+        };
+        const MANUAL_APP_ID = "racko-github-default"; // ID per defecte si s'executa a GitHub
+
+
+        // Configuració de Firebase i variables globals (Prioritza Canvas, sinó usa MANUAL)
+        const isCanvasEnvironment = typeof __firebase_config !== 'undefined';
         
-        // Configuració de Firebase i variables globals
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = isCanvasEnvironment ? (typeof __app_id !== 'undefined' ? __app_id : 'default-app-id') : MANUAL_APP_ID;
+        
+        const firebaseConfig = isCanvasEnvironment ? 
+            JSON.parse(__firebase_config) : 
+            FIREBASE_SETTINGS;
+            
+        const initialAuthToken = isCanvasEnvironment ? (typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null) : null;
 
         let app, db, auth;
         let userId = null;
@@ -188,10 +223,9 @@
         let unsubscribeGame = null;
 
         // Estats de joc del client
-        let heldCard = null; // Carta que el jugador té a la mà per reemplaçar
-        let heldSource = null; // D'on ve la carta: 'draw' o 'discard'
-        let hasCheckedRackO = false;
-
+        let heldCard = null; 
+        let heldSource = null; 
+        
         // Referència al component de la carta flotant (cursor)
         const floatingCardElement = document.getElementById('floating-card');
         const floatingCardValueElement = floatingCardElement.querySelector('.card-value');
@@ -214,48 +248,45 @@
         // Inicialització de Firebase
         const initFirebase = async () => {
             if (Object.keys(firebaseConfig).length === 0) {
-                console.error("Firebase config is missing.");
-                document.getElementById('main-container').innerHTML = `<p class="text-red-600">Error: La configuració de Firebase no està disponible.</p>`;
+                console.error("Firebase config is missing. Please set FIREBASE_SETTINGS for GitHub execution.");
+                document.getElementById('main-container').innerHTML = `<p class="text-red-600">Error: La configuració de Firebase no està disponible. Si ho executes des de GitHub, has d'establir la variable FIREBASE_SETTINGS al codi font.</p>`;
                 return;
             }
             try {
-                // setLogLevel('debug'); // Descomentar per veure logs detallats de Firestore
+                // setLogLevel('debug'); // Uncomment to see detailed Firestore logs
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
 
-                // Autenticació
+                // Authentication
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         userId = user.uid;
-                        document.getElementById('user-id-display').textContent = `ID d'Usuari: ${userId}`;
-                        // Intentar carregar l'última partida si existeix
+                        // UPDATE DEBUG PANEL: Show User ID
+                        document.getElementById('user-id-display').innerHTML = `ID d'Usuari: <span class="font-mono text-xs">${userId}</span>`;
+                        console.log(`[AUTH] User ID set: ${userId}. Attempting to load last game...`);
                         loadLastGame();
                     } else {
-                        if (initialAuthToken) {
+                        // Lògica d'autenticació adaptada per a Canvas vs GitHub
+                        if (isCanvasEnvironment && initialAuthToken) {
+                            // Entorn Canvas: Usa el token personalitzat
                             await signInWithCustomToken(auth, initialAuthToken);
                         } else {
+                            // Entorn GitHub/Altres: Usa l'autenticació anònima
                             await signInAnonymously(auth);
                         }
                     }
                 });
             } catch (error) {
                 console.error("Error inicialitzant Firebase:", error);
-                document.getElementById('main-container').innerHTML = `<p class="text-red-600">Error en la inicialització de l'aplicació.</p>`;
+                document.getElementById('main-container').innerHTML = `<p class="text-red-600">Error en la inicialització de l'aplicació. (Comprova la configuració de FIREBASE_SETTINGS si no ets a Canvas).</p>`;
             }
         };
 
-        // --- FUNCIONS CORE DE JOC ---
-
-        const CARD_DECK_SIZES = { 2: 40, 3: 50, 4: 60 };
-        const NUM_CARDS_IN_RACK = 10;
-        const RACKO_POINTS = 75;
-        const SEQUENCE_POINTS_PER_CARD = 5;
-
+        // --- FUNCIONS CORE DE JOC (omitted for brevity, they remain the same) ---
         // Funció per crear i barrejar la baralla
         const createAndShuffleDeck = (maxCard) => {
             let newDeck = Array.from({ length: maxCard }, (_, i) => i + 1);
-            // Algoritme de Fisher-Yates per barrejar
             for (let i = newDeck.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
                 [newDeck[i], newDeck[j]] = [newDeck[j], newDeck[i]];
@@ -265,6 +296,7 @@
 
         // Condició 1: Comprovar si totes les cartes estan en ordre ascendent
         const checkAscendingOrder = (rack) => {
+            const NUM_CARDS_IN_RACK = 10;
             if (rack.length !== NUM_CARDS_IN_RACK || rack.includes(null)) return false;
             for (let i = 0; i < rack.length - 1; i++) {
                 if (rack[i] >= rack[i + 1]) {
@@ -276,11 +308,9 @@
 
         // Condició 2 (Només 2 Jugadors): Comprovar si hi ha 3 números consecutius
         const checkForConsecutiveSequence = (rack) => {
-            // Recorrem el rack fins al tercer últim element
             for (let i = 0; i <= rack.length - 3; i++) {
-                // Comprovem si rack[i] + 1 = rack[i+1] i rack[i+1] + 1 = rack[i+2]
                 if (rack[i] + 1 === rack[i + 1] && rack[i + 1] + 1 === rack[i + 2]) {
-                    return true; // Trobada una seqüència de 3
+                    return true; 
                 }
             }
             return false;
@@ -289,25 +319,20 @@
         // Comprovació de la Condició de Victòria Final
         const checkVictoryCondition = (game, playerRack) => {
             const isAscending = checkAscendingOrder(playerRack);
-
-            // Si no està en ordre ascendent, no pot guanyar
             if (!isAscending) return false;
-
-            // Condició per a 3 o 4 Jugadors: només cal l'ordre ascendent
             if (game.numPlayers > 2) {
                 return true;
             }
-
-            // Condició Personalitzada per a 2 Jugadors: Ascendent I 3 consecutius
             if (game.numPlayers === 2) {
                 return checkForConsecutiveSequence(playerRack);
             }
-            
             return false; 
         };
 
         // Funció per calcular la puntuació de Rack-O (Seqüència ascendent des de la ranura #1)
         const calculateSequenceScore = (rack) => {
+            const SEQUENCE_POINTS_PER_CARD = 5;
+            const NUM_CARDS_IN_RACK = 10;
             let score = 0;
             if (rack.length !== NUM_CARDS_IN_RACK || rack.includes(null)) return 0;
             
@@ -320,71 +345,103 @@
             }
             return score;
         };
+        // --- FI DE FUNCIONS CORE DE JOC ---
+
 
         // --- FIREBASE I GESTIÓ DE PARTIDES ---
+        const CARD_DECK_SIZES = { 2: 40, 3: 50, 4: 60 };
+        const NUM_CARDS_IN_RACK = 10;
+        const RACKO_POINTS = 75;
 
         const getGameRef = (gameId) => doc(db, 'artifacts', appId, 'public', 'data', 'racko_games', gameId);
 
         const loadLastGame = async () => {
-            if (!userId) return;
+            if (!userId || gameId) return; 
 
-            // Intenta trobar una partida activa on l'usuari estigui jugant
+            // Search for an active game where the user is a participant
             const q = query(
                 collection(db, 'artifacts', appId, 'public', 'data', 'racko_games'),
-                where('status', 'in', ['lobby', 'playing', 'finished_hand']),
-                where('playerIds', 'array-contains', userId)
+                where('playerIds', 'array-contains', userId) // Check if user is in playerIds array
             );
             
             try {
                 const snapshot = await getDocs(q);
                 if (!snapshot.empty) {
+                    // Found an existing game!
                     gameId = snapshot.docs[0].id;
+                    console.log(`[LOAD] Reconnecting to existing game ID: ${gameId}`);
                     startListeningToGame(gameId);
                 } else {
-                    // Si no hi ha partida activa, mostra el lobby per crear/unir-se
+                    console.log("[LOAD] No active game found for this user. Rendering lobby.");
                     renderLobby();
                 }
             } catch (error) {
-                console.error("Error carregant l'última partida:", error);
-                // Si hi ha un error, també mostra el lobby per permetre crear una nova partida
-                renderLobby("Error carregant l'última partida: " + error.message);
+                console.error("Error carregant l'última partida (REQUEREIX REVISIÓ DE REGLES):", error);
+                renderLobby("Error carregant l'última partida. (Problema de Permisos/Connexió). Intenta crear-ne una de nova.");
             }
         };
 
         const startListeningToGame = (id) => {
             if (unsubscribeGame) unsubscribeGame();
             gameId = id;
+            document.getElementById('game-id-value').textContent = gameId; // Update debug panel immediately
 
             unsubscribeGame = onSnapshot(getGameRef(gameId), (doc) => {
                 if (doc.exists()) {
                     gameState = doc.data();
+                    console.log(`[SNAPSHOT] Game state updated for ID: ${gameId}, Status: ${gameState.status}`);
                     renderGame(gameState);
                 } else {
-                    console.log(`[STATE] Partida ${gameId} ja no existeix. Tornant al Lobby.`);
-                    gameId = null;
-                    gameState = null;
-                    renderLobby("La partida ha estat eliminada.");
+                    console.error(`[SNAPSHOT ERROR] Partida ${gameId} ja no existeix. Tornant al Lobby.`);
+                    // Case 1: Game document was deleted (e.g., by another player or server cleanup)
+                    resetLobbyState("La partida ha estat eliminada del servidor (Firestore). Torna a crear o unir-te.");
                 }
             }, (error) => {
-                console.error("Error en onSnapshot:", error);
-                renderLobby("Error de connexió en temps real.");
+                console.error("Error en onSnapshot (connexió perduda):", error);
+                // Case 2: Real-time connection error (e.g., network timeout, permission issue)
+                resetLobbyState("Error de connexió en temps real. Torna a intentar d'unir-te. (Revisa la teva connexió)");
             });
         };
 
+        // Nova funció per reiniciar l'estat local i forçar el renderitzat del Lobby
+        const resetLobbyState = (message = "L'estat de connexió s'ha netejat. Torna a unir-te o crea una nova partida.") => {
+            console.log("[LOBBY] Reiniciant estat local.");
+            if (unsubscribeGame) {
+                unsubscribeGame();
+                unsubscribeGame = null;
+            }
+            gameId = null;
+            gameState = null;
+            heldCard = null;
+            heldSource = null;
+            floatingCardElement.classList.remove('active');
+            document.getElementById('game-id-value').textContent = 'N/A'; // Clear debug panel
+            renderLobby(message);
+        };
+
+        // PERSISTÈNCIA DEL NOM: Guarda el nom al localStorage
         const validatePlayerName = (name) => {
             const trimmedName = name.trim();
             if (trimmedName.length < 2 || trimmedName.length > 15) {
                 showModal("Error de Nom", "Introdueix un nom vàlid d'entre 2 i 15 caràcters.");
                 return null;
             }
+            localStorage.setItem('racko_player_name', trimmedName); // Save on success
             return trimmedName;
         }
 
         const createGame = async (numPlayers, rawPlayerName) => {
+            const createButton = event.currentTarget;
+            const originalText = createButton.innerHTML;
+            
             const playerName = validatePlayerName(rawPlayerName);
-            if (!playerName || numPlayers < 2 || numPlayers > 4) return;
-
-            // --- Lògica per generar un ID de 4 dígits únic ---
+            if (!playerName || numPlayers < 2 || numPlayers > 4) return; // Validation failed
+            
+            // Set loading state *after* successful validation
+            createButton.disabled = true;
+            createButton.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Creant...`;
+            lucide.createIcons();
+            
             let uniqueId = null;
             let maxRetries = 10;
             for (let i = 0; i < maxRetries; i++) {
@@ -400,17 +457,18 @@
 
             if (!uniqueId) {
                 showModal("Error", "No s'ha pogut generar una ID única de 4 dígits. Torna a intentar-ho.");
+                createButton.disabled = false;
+                createButton.innerHTML = originalText;
                 return;
             }
-            // --------------------------------------------------
 
             const maxCardValue = CARD_DECK_SIZES[numPlayers];
             const fullDeck = createAndShuffleDeck(maxCardValue);
             
             const newPlayer = {
                 id: userId,
-                name: playerName, // Utilitzem el nom proporcionat
-                rack: Array(NUM_CARDS_IN_RACK).fill(null), // S'omplirà més tard
+                name: playerName, 
+                rack: Array(NUM_CARDS_IN_RACK).fill(null), 
                 score: 0,
                 scoreHistory: []
             };
@@ -421,7 +479,7 @@
                 maxCardValue: maxCardValue,
                 playerIds: [userId],
                 players: [newPlayer],
-                deck: fullDeck, // La baralla sense les cartes de l'atril
+                deck: fullDeck,
                 discardPile: [],
                 turn: null, 
                 messages: [`${newPlayer.name} ha creat la partida.`],
@@ -429,108 +487,128 @@
             };
 
             try {
-                // Utilitzem setDoc amb l'ID específic
                 const newGameRef = getGameRef(uniqueId);
                 await setDoc(newGameRef, newGameData);
+                console.log(`[CREATE] Partida ${uniqueId} creada amb èxit.`);
+                // Start listening immediately upon creation success
                 startListeningToGame(uniqueId);
-                console.log(`[CREATE] Partida ${uniqueId} creada amb èxit per ${playerName}.`);
             } catch (error) {
-                console.error("Error creant la partida:", error);
-                showModal("Error", "No s'ha pogut crear la partida.");
+                console.error("Error creant la partida (REQUEREIX REVISIÓ DE REGLES):", error);
+                showModal("Error", "No s'ha pogut crear la partida. Assegura't de tenir connexió a internet i que les regles de seguretat ho permetin.");
+                resetLobbyState(); // Ensures lobby is re-rendered with error message
+            } finally {
+                // If resetLobbyState was NOT called (i.e., startListeningToGame succeeded), 
+                // the UI will transition away from the lobby, so no need to reset button.
+                if (!gameId) {
+                     createButton.disabled = false;
+                     createButton.innerHTML = originalText;
+                }
             }
         };
 
         const joinGame = async (gameIdToJoin, rawPlayerName) => {
+            const joinButton = document.getElementById('join-button');
+            
+            // 1. Initial validation
             const playerName = validatePlayerName(rawPlayerName);
-            if (!playerName) return;
-
             const trimmedId = gameIdToJoin.trim();
+            if (!playerName) return; // Name error already handled by modal in validatePlayerName
             
             if (!trimmedId || trimmedId.length !== 4 || isNaN(trimmedId)) {
                 showModal("Error", "Introdueix una ID de partida vàlida de 4 dígits.");
                 return;
             }
+            
+            // Set loading state *after* successful validation
+            joinButton.disabled = true;
+            joinButton.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i> Carregant...`;
+            lucide.createIcons(); 
 
             const gameRef = getGameRef(trimmedId);
 
-            // 1. Verificar l'existència i si l'usuari ja és a la partida (cas de reconnexió)
             try {
-                console.log(`[JOIN] Intentant connectar-se a la partida amb ID: ${trimmedId} com a usuari ${userId}`);
+                console.log(`[JOIN] Attempting to join game ID: ${trimmedId}`);
                 
                 const gameDoc = await getDoc(gameRef);
                 
                 if (!gameDoc.exists()) {
-                    console.error(`[JOIN ERROR] La partida amb ID ${trimmedId} no es troba.`);
-                    showModal("Error", "La partida no existeix (Codi incorrecte).");
-                    return;
+                    console.error(`[JOIN ERROR] Game ID ${trimmedId} not found.`);
+                    throw new Error("La partida no existeix (Codi incorrecte)."); 
                 }
 
                 const game = gameDoc.data();
+                
                 if (game.playerIds.includes(userId)) {
-                    // Si l'usuari ja és membre, simplement connecta'l immediatament
-                    console.log(`[JOIN] Usuari ${userId} ja a la partida. Reconectant.`);
+                    // Reconnection case: user already in the game
+                    console.log(`[JOIN] User ${userId} already in game. Reconnecting.`);
                     startListeningToGame(trimmedId);
                     return; 
                 }
-            } catch (error) {
-                console.error("Error durant la pre-validació o lectura inicial:", error);
-                showModal("Error", "No s'ha pogut realitzar la pre-validació.");
-                return;
-            }
-            
-            // 2. Si l'usuari NO és a la partida, intenta unir-lo usant una transacció
-            try {
+
+                // Joining case: use transaction to add player
                 await runTransaction(db, async (transaction) => {
-                    const gameDoc = await transaction.get(gameRef);
-                    const game = gameDoc.data(); 
+                    const gameDocInTx = await transaction.get(gameRef);
+                    const gameInTx = gameDocInTx.data(); 
                     
-                    if (game.status !== 'lobby') {
+                    if (gameInTx.status !== 'lobby') {
                         throw new Error("La partida ja ha començat.");
                     }
-                    if (game.playerIds.length >= game.numPlayers) {
+                    if (gameInTx.playerIds.length >= gameInTx.numPlayers) {
                         throw new Error("La partida està plena.");
                     }
                     
-                    // Afegir nou jugador
                     const newPlayer = {
                         id: userId,
-                        name: playerName, // Utilitzem el nom proporcionat
+                        name: playerName, 
                         rack: Array(NUM_CARDS_IN_RACK).fill(null),
                         score: 0,
                         scoreHistory: []
                     };
                     
-                    // Comprovar si el nom ja està en ús (opcional, però bona pràctica)
-                    if (game.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) {
+                    if (gameInTx.players.some(p => p.name.toLowerCase() === playerName.toLowerCase())) {
                         throw new Error("Aquest nom ja està en ús en aquesta partida.");
                     }
 
-                    // Afegim el nou jugador a l'array de players abans d'escriure
-                    const updatedPlayers = [...game.players, newPlayer];
+                    const updatedPlayers = [...gameInTx.players, newPlayer];
 
                     transaction.update(gameRef, {
                         playerIds: arrayUnion(userId),
-                        players: updatedPlayers, // Actualitzem la llista completa de jugadors
+                        players: updatedPlayers,
                         messages: arrayUnion(`${newPlayer.name} s'ha unit.`),
                         lastUpdate: Date.now()
                     });
-
-                    console.log(`[JOIN SUCCESS] Usuari ${userId} afegit a la llista de jugadors. Total: ${updatedPlayers.length}`);
+                    console.log(`[JOIN SUCCESS] Transaction committed.`);
 
                 });
                 
-                // 3. Unió exitosa mitjançant transacció, ara connecta't
+                // If transaction succeeds, start listening
                 startListeningToGame(trimmedId);
+
             } catch (error) {
-                console.error("Error unint-se a la partida mitjançant transacció:", error);
-                showModal("Error", `No s'ha pogut unir a la partida: ${error.message}`);
-                renderLobby();
+                console.error("=================================================");
+                console.error("[!!! REQUERIT PER AL DIAGNÒSTIC !!!] Error unint-se a la partida (REQUEREIX REVISIÓ DE REGLES):", error);
+                console.error("=================================================");
+                // Specific error messages for the user
+                let msg = error.message.includes("document does not exist") ? "La partida no existeix (Codi incorrecte)." : error.message;
+                // Check for generic Firebase permission error and provide a specific user message
+                if (error.code === 'permission-denied' || error.message.includes('permissions')) {
+                     msg = "Permisos Insuficients: Assegura't que has publicat les regles de seguretat més recents a Firebase!";
+                }
+                showModal("Error d'Unió", `No s'ha pogut unir a la partida: ${msg}.`);
+                resetLobbyState(); // Ensure UI state is clean after failure
+            } finally {
+                // Ensure button resets if connection was NOT successful
+                if (!gameId) { 
+                    joinButton.disabled = false;
+                    joinButton.innerHTML = `Unir-se`;
+                }
             }
         };
 
         const startGame = async () => {
             if (!gameState || gameState.status !== 'lobby' || gameState.playerIds.length < 2) return;
 
+            // Rest of startGame logic (omitted for brevity, remains the same)
             try {
                 await runTransaction(db, async (transaction) => {
                     const gameRef = getGameRef(gameId);
@@ -541,45 +619,37 @@
                     }
 
                     const game = gameDoc.data();
-                    let fullDeck = createAndShuffleDeck(game.maxCardValue); // Nova baralla barrejada
+                    let fullDeck = createAndShuffleDeck(game.maxCardValue); 
                     let players = game.players;
 
-                    console.log(`[START GAME] Iniciant repartiment per a ${players.length} jugadors.`);
-
-                    // 1. Repartiment inicial (10 cartes a cada slot, de dalt a baix)
                     let newRacks = Array.from({ length: players.length }, () => Array(NUM_CARDS_IN_RACK).fill(null));
 
-                    // L'ordre de repartiment va de la ranura 10 cap a la 1
                     for (let i = NUM_CARDS_IN_RACK - 1; i >= 0; i--) { 
                         for (let j = 0; j < players.length; j++) {
                             const card = fullDeck.pop();
                             if (card !== undefined) {
-                                newRacks[j][i] = card; // Assignar a la ranura (0=slot 1, 9=slot 10)
+                                newRacks[j][i] = card; 
                             }
                         }
                     }
 
-                    // Actualitzar els racks dels jugadors
                     players = players.map((p, index) => ({
                         ...p,
                         rack: newRacks[index]
                     }));
 
-                    // 2. Moure la primera carta del munt als descarts
                     const firstDiscard = fullDeck.pop();
                     let discardPile = [];
                     if (firstDiscard !== undefined) {
                         discardPile.push(firstDiscard);
                     }
                     
-                    // 3. Assignar el primer torn (aleatoriament)
                     const startingPlayerIndex = Math.floor(Math.random() * players.length);
                     const startingPlayerId = players[startingPlayerIndex].id;
 
-                    // 4. Actualitzar estat
                     transaction.update(gameRef, {
                         status: 'playing',
-                        players: players, // Sobreescriu la llista de jugadors actualitzada
+                        players: players, 
                         deck: fullDeck,
                         discardPile: discardPile,
                         turn: startingPlayerId,
@@ -595,17 +665,13 @@
             }
         };
 
-        // --- LÒGICA DE TORNADA ---
-
         const handleDrawCard = async (source) => {
+            // Lògica de handleDrawCard (omitted for brevity, remains the same)
             if (!isMyTurn() || heldCard) {
-                // Afegim log per depurar per què no es pot agafar la carta
                 if (!isMyTurn()) {
-                    console.error("[DRAW ERROR] No pots agafar carta: No és el teu torn.");
                     showModal("❌ Acció Invàlida", "No és el teu torn.");
                 } else if (heldCard) {
-                    console.error("[DRAW ERROR] No pots agafar carta: Ja tens una carta a la mà.");
-                    showModal("❌ Acció Invàlida", "Ja tens la carta " + heldCard + " a la mà.");
+                    showModal("❌ Acció Invàlida", "Ja tens una carta a la mà.");
                 }
                 return;
             }
@@ -615,7 +681,6 @@
             let cardValue = null;
 
             try {
-                // Utilitzem una transacció per assegurar que l'acció és atòmica
                 await runTransaction(db, async (transaction) => {
                     const gameRef = getGameRef(gameId);
                     const gameDoc = await transaction.get(gameRef);
@@ -624,7 +689,6 @@
                     if (game.turn !== userId) throw new Error("Ja no és el teu torn.");
 
                     if (source === 'draw') {
-                        // pop() a un array gran pot ser costós, però és necessari aquí
                         cardValue = game.deck.pop(); 
                         if (cardValue === undefined) throw new Error("Baralla buida.");
                     } else if (source === 'discard') {
@@ -632,7 +696,6 @@
                          if (cardValue === undefined) throw new Error("Descart buit.");
                     }
 
-                    // Actualitzem el deck o discardPile al servidor dins de la transacció.
                     const updateData = {};
                     if (source === 'draw') {
                         updateData.deck = game.deck; 
@@ -643,28 +706,24 @@
                     transaction.update(gameRef, updateData);
                 });
                 
-                // Si la transacció té èxit, actualitzar l'estat local del client:
                 heldCard = cardValue;
                 heldSource = source;
-                renderRack(); // Refrescar per activar els slots
+                renderRack(); 
                 
-                // Activar la carta flotant
                 floatingCardValueElement.textContent = heldCard;
                 floatingCardElement.classList.add('active');
 
-                // Si ha agafat del munt, pot descartar-la sense posar-la al rack
                 if (source === 'draw') {
                     console.log(`[DRAW] Carta ${cardValue} agafada del munt.`);
-
+                    // The button will be shown in renderGame's action area update
                 } else {
-                    // Si agafa del descart, no mostrar modal
                     const messageElement = document.getElementById('action-area');
                     messageElement.innerHTML = `
                         <div class="p-2 border border-blue-200 rounded-lg bg-blue-50">
                             <p class="text-sm font-semibold text-blue-700">Has agafat la carta <span class="text-xl text-red-600 font-extrabold">${cardValue}</span> del descart. Clica una ranura per reemplaçar.</p>
                         </div>
                     `;
-                    document.getElementById('discard-immediate-btn')?.classList.add('hidden'); // Assegura't que el botó no es vegi
+                    document.getElementById('discard-immediate-btn')?.classList.add('hidden');
                 }
 
 
@@ -675,6 +734,7 @@
         };
 
         const handleDiscardImmediate = async () => {
+             // Lògica de handleDiscardImmediate (omitted for brevity, remains the same)
             if (!isMyTurn() || !heldCard || heldSource !== 'draw') return showModal("❌ Acció Invàlida", "Només pots descartar immediatament si agafes del munt.");
 
             const cardToDiscard = heldCard;
@@ -687,10 +747,8 @@
 
                     if (game.turn !== userId) throw new Error("Ja no és el teu torn.");
 
-                    // Afegir la carta directament a la pila de descart
                     game.discardPile.push(cardToDiscard);
 
-                    // Avançar el torn
                     const nextTurnId = getNextPlayerId(game);
 
                     transaction.update(gameRef, {
@@ -700,10 +758,9 @@
                         lastUpdate: Date.now()
                     });
                 });
-                // Netegem l'estat local
                 heldCard = null;
                 heldSource = null;
-                floatingCardElement.classList.remove('active'); // Desactivar la carta flotant
+                floatingCardElement.classList.remove('active'); 
                 document.getElementById('discard-immediate-btn')?.classList.add('hidden');
 
             } catch (error) {
@@ -714,6 +771,7 @@
 
 
         const handleReplaceCard = async (slotIndex) => {
+            // Lògica de handleReplaceCard (omitted for brevity, remains the same)
             if (!isMyTurn() || !heldCard) return showModal("❌ Acció Invàlida", "Primer has d'agafar una carta.");
             
             const player = getMyPlayer();
@@ -734,11 +792,9 @@
                     
                     const currentPlayer = players[currentPlayerIndex];
 
-                    // 1. Reemplaçar localment la carta per comprovar la victòria
                     const newRack = [...currentPlayer.rack];
                     newRack[slotIndex] = newCard;
 
-                    // 2. Comprovar Rack-O amb la nova lògica de condició de victòria
                     let status = game.status;
                     let winnerId = null;
                     let winMessage = '';
@@ -755,16 +811,12 @@
                         game.messages.push(winMessage);
                     }
 
-                    // 3. Actualitzar l'estat del jugador a la transacció
                     currentPlayer.rack = newRack;
                     
-                    // 4. Afegir la carta descartada a la pila de descart
                     game.discardPile.push(cardToDiscard);
 
-                    // 5. Avançar el torn (si no s'ha guanyat la mà)
                     const nextTurnId = (status !== 'finished_hand') ? getNextPlayerId(game) : game.turn;
 
-                    // Actualitzar la partida
                     transaction.update(gameRef, {
                         players: players,
                         discardPile: game.discardPile,
@@ -776,10 +828,9 @@
                     });
                 });
                 
-                // Netegem l'estat local
                 heldCard = null;
                 heldSource = null;
-                floatingCardElement.classList.remove('active'); // Desactivar la carta flotant
+                floatingCardElement.classList.remove('active'); 
                 document.getElementById('discard-immediate-btn')?.classList.add('hidden');
 
             } catch (error) {
@@ -795,9 +846,8 @@
             return playerIds[nextIndex];
         };
         
-        // --- LÒGICA DE PUNTUACIÓ (Després que algú guanyi la mà) ---
-
         const endHandAndScore = async () => {
+            // Lògica de endHandAndScore (omitted for brevity, remains the same)
             if (!gameState || gameState.status !== 'finished_hand' || gameState.winnerId !== userId) return showModal("❌ Acció Invàlida", "Només el guanyador pot puntuar la mà.");
 
             try {
@@ -811,57 +861,48 @@
                     let players = game.players;
                     const winnerId = game.winnerId;
                     
-                    // 1. Calcular la puntuació
                     const newScores = players.map(p => {
                         let score = 0;
                         if (p.id === winnerId) {
-                            score = RACKO_POINTS; // 75 punts pel guanyador
+                            score = RACKO_POINTS; 
                         } else {
-                            score = calculateSequenceScore(p.rack); // Punts per seqüència
+                            score = calculateSequenceScore(p.rack); 
                         }
 
                         const newTotalScore = p.score + score;
                         return {
                             ...p,
-                            rack: Array(NUM_CARDS_IN_RACK).fill(null), // Reiniciat per la nova mà
+                            rack: Array(NUM_CARDS_IN_RACK).fill(null), 
                             score: newTotalScore,
                             scoreHistory: [...p.scoreHistory, score]
                         };
                     });
 
-                    // 2. Comprovar si algú ha arribat a 500 punts
                     const gameWinner = newScores.find(p => p.score >= 500);
 
-                    // 3. Preparar la nova mà (nova baralla, nou repartiment)
                     const maxCardValue = game.maxCardValue;
                     const fullDeck = createAndShuffleDeck(maxCardValue);
                     let deck = fullDeck;
                     const newDiscardPile = [];
-                    const nextTurnId = game.winnerId; // El guanyador comença la següent mà
+                    const nextTurnId = game.winnerId; 
 
-                    // Repartir 10 cartes noves a cada jugador
                     const playersForNextHand = newScores.map(p => {
                         const newRack = [];
                         for (let i = 0; i < NUM_CARDS_IN_RACK; i++) {
-                            // pop() és més eficient que shift()
                             const card = deck.pop(); 
                             if (card !== undefined) {
                                 newRack.push(card);
                             }
                         }
-                        // L'ordre correcte de repartiment és de slot 10 a 1, així que invertim la llista d'extracció
                         newRack.reverse(); 
 
                         return { ...p, rack: newRack };
                     });
                     
-                    // Treure la primera carta per als descarts
                     if (deck.length > 0) {
                         newDiscardPile.push(deck.pop());
                     }
 
-
-                    // 4. Actualitzar l'estat de la partida
                     transaction.update(gameRef, {
                         status: gameWinner ? 'finished' : 'playing',
                         players: playersForNextHand,
@@ -890,8 +931,14 @@
             heldCard = null;
             floatingCardElement.classList.remove('active');
 
-            // Aquesta funció només s'ha d'executar si l'usuari no està connectat a cap partida activa.
-            if (gameId) return; 
+            // If the user is somehow in a game state but renderLobby is called, don't proceed.
+            if (gameId && gameState) {
+                 console.warn("Attempted to render Lobby while connected to a game. Skipping.");
+                 return;
+            }
+            
+            // Càrrega del nom guardat
+            const savedName = localStorage.getItem('racko_player_name') || '';
 
             document.getElementById('game-status').innerHTML = `<span class="text-xl font-bold text-gray-800">Sala d'Espera</span>`;
             document.getElementById('game-container').innerHTML = `
@@ -899,26 +946,35 @@
                     
                     <h3 class="text-xl font-bold mb-4 text-indigo-600">El Teu Nom</h3>
                     <p class="mb-2 text-sm text-gray-700">Com vols que et vegin els altres jugadors (2-15 caràcters)?</p>
-                    <input type="text" id="player-name-input" maxlength="15" placeholder="Escriu el teu nom de jugador" class="w-full p-3 border-2 border-indigo-300 rounded-lg mb-6 focus:ring-indigo-500 focus:border-indigo-500 text-center text-xl font-semibold">
+                    <input type="text" id="player-name-input" maxlength="15" placeholder="Escriu el teu nom de jugador" value="${savedName}" class="w-full p-3 border-2 border-indigo-300 rounded-lg mb-6 focus:ring-indigo-500 focus:border-indigo-500 text-center text-xl font-semibold">
+
+
+                    <h3 class="text-2xl font-bold mb-4 text-indigo-600">Unir-se a Partida</h3>
+                    <p class="mb-2 text-sm text-gray-700">Introdueix el codi numèric de <span class="font-bold">4 dígits</span> de la partida existent.</p>
+                    <input type="text" id="join-game-input" maxlength="4" placeholder="Codi de 4 dígits (Ex: 1234)" class="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-indigo-500 focus:border-indigo-500 text-center text-xl font-mono tracking-widest">
+                    <button id="join-button" onclick="window.gameFunctions.joinGame(document.getElementById('join-game-input').value, document.getElementById('player-name-input').value)" class="w-full py-3 bg-indigo-500 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-300 mb-8">
+                        Unir-se
+                    </button>
 
 
                     <h3 class="text-2xl font-bold mb-4 text-indigo-600">Crear Partida</h3>
                     <p class="mb-4 text-gray-700">Selecciona el nombre de jugadors per començar. Es generarà un codi de <span class="font-bold text-red-600">4 dígits</span>.</p>
-                    <div class="flex justify-around space-x-4 mb-8">
+                    <div class="flex justify-around space-x-4">
                         ${[2, 3, 4].map(n => `
                             <button onclick="window.gameFunctions.createGame(${n}, document.getElementById('player-name-input').value)" class="flex-1 py-3 px-4 bg-purple-500 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 transition duration-300">
                                 ${n} Jugadors (Cartes 1-${CARD_DECK_SIZES[n]})
                             </button>
                         `).join('')}
                     </div>
+                    <p class="mt-4 text-sm text-red-600 font-semibold">${message}</p>
+                    
+                    <!-- BOTÓ DE REINICIAR LOBBY -->
+                    <div class="mt-6 border-t pt-4">
+                        <button onclick="window.gameFunctions.resetLobbyState()" class="w-full py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition duration-300 flex items-center justify-center">
+                            <i data-lucide="rotate-ccw" class="w-4 h-4 mr-2"></i> Reiniciar Connexió
+                        </button>
+                    </div>
 
-                    <h3 class="text-2xl font-bold mb-4 text-indigo-600">Unir-se a Partida</h3>
-                    <p class="mb-2 text-sm text-gray-700">Introdueix el codi numèric de <span class="font-bold">4 dígits</span> de la partida existent.</p>
-                    <input type="text" id="join-game-input" maxlength="4" placeholder="Codi de 4 dígits (Ex: 1234)" class="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-indigo-500 focus:border-indigo-500 text-center text-xl font-mono tracking-widest">
-                    <button onclick="window.gameFunctions.joinGame(document.getElementById('join-game-input').value, document.getElementById('player-name-input').value)" class="w-full py-3 bg-indigo-500 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-300">
-                        Unir-se
-                    </button>
-                    <p class="mt-4 text-sm text-red-600">${message}</p>
                 </div>
             `;
             // Assegura't que l'àrea de joc activa estigui oculta
@@ -931,37 +987,31 @@
             const container = document.getElementById('game-container');
             const myPlayer = getMyPlayer();
             
-            // Si el jugador local es perd, mostra un error i torna al lobby
-            if (!myPlayer && game.status !== 'lobby') {
-                console.error(`[RENDER ERROR] Jugador ${userId} no trobat a la llista de jugadors. Llista actual: ${game.playerIds.join(', ')}`);
-                
-                let isIdPresent = game.playerIds.includes(userId);
-                let errorMessage = `<p class="text-xl text-red-600 font-semibold">Sembla que ja no ets a la partida. Uneix-te de nou o crea'n una de nova. (ID present: ${isIdPresent})</p>`;
-                if (isIdPresent) {
-                    errorMessage = `<p class="text-xl text-red-600 font-semibold">Error Crític de Sincronització. Torna a unir-te a la partida ${gameId}.</p>`;
-                }
-
+            // Critical check for player existence
+            if (!myPlayer) {
+                console.error(`[RENDER ERROR] Player ${userId} not found in the game object.`);
+                let errorMessage = `<p class="text-xl text-red-600 font-semibold">Error de sincronització crític. Intenta ${gameId} unir-te de nou o ${game.playerIds.includes(userId) ? 'contacta amb el suport' : 'crea una nova partida'}.</p>`;
                 container.innerHTML = errorMessage;
-                if (unsubscribeGame) unsubscribeGame();
-                gameId = null;
-                // Cal tornar a carregar el lobby per permetre la reconnexió
-                setTimeout(loadLastGame, 1000); 
+                // If we are listening but the player object is missing, reset state
+                if (gameId) resetLobbyState("Error: No es troba el teu jugador a la partida. S'ha restablert la connexió. Pots provar d'unir-te amb el mateix ID de partida.");
                 return;
             }
             
-            // Neteja de la UI segons l'Estat de la Partida
+            // UPDATE DEBUG PANEL: Show Active Game ID
+            document.getElementById('game-id-value').textContent = gameId;
+
+            // Clear UI if we were previously in the lobby, or re-render lobby if status is lobby
             if (game.status === 'lobby') {
                 document.getElementById('game-active-area').classList.add('hidden');
                 document.getElementById('game-container').innerHTML = ''; 
-                // Renderitza el contingut del lobby dins de game-container
                 renderLobbyContent(game);
-                return; // Acabem de renderitzar aquí per l'estat 'lobby'
+                return;
             } else {
                 document.getElementById('game-active-area').classList.remove('hidden');
                 document.getElementById('game-container').innerHTML = '';
             }
             
-            // Assegurar que la carta flotant reflecteix l'estat local
+            // Set floating card state
             if (heldCard) {
                 floatingCardValueElement.textContent = heldCard;
                 floatingCardElement.classList.add('active');
@@ -969,14 +1019,11 @@
                 floatingCardElement.classList.remove('active');
             }
 
-
-            document.getElementById('game-id-value').textContent = gameId;
-
             const isFinishedHand = game.status === 'finished_hand';
             const isFinishedGame = game.status === 'finished';
             const isCurrentTurn = isMyTurn() && !isFinishedHand && !isFinishedGame;
 
-            // 1. Renderitzat de l'Estat de la Partida i Informació del Jugador
+            // 1. Renderitzat de l'Estat de la Partida i Informació del Jugador (Status Bar)
             let statusText = '';
             let statusColor = '';
             if (isFinishedGame) {
@@ -990,7 +1037,6 @@
             } else { // Playing
                 const turnPlayer = game.players.find(p => p.id === game.turn);
                 statusText = `👉 Torn de: ${turnPlayer?.name || 'Desconegut'}`;
-                // *** Actualització: Verd per el teu torn, Vermell/Fosc per esperar ***
                 statusColor = isCurrentTurn ? 'bg-green-600 text-white' : 'bg-red-600 text-white';
             }
             document.getElementById('game-status').innerHTML = `<span class="px-4 py-2 rounded-full font-bold ${statusColor} text-sm">${statusText}</span>`;
@@ -998,15 +1044,13 @@
 
             // 2. Renderitzat del Tauler de Joc (Deck & Discard)
             const deckContent = game.deck.length > 0 ? `<div class="card-back flex items-center justify-center rounded-lg w-full h-full text-2xl" onclick="${isCurrentTurn && !heldCard ? 'window.gameFunctions.handleDrawCard(\'draw\')' : ''}">
-                <i data-lucide="spade"></i>
+                <i data-lucide="layers"></i>
             </div>` : `<div class="flex items-center justify-center w-full h-full text-lg text-gray-500">Buit</div>`;
             document.getElementById('draw-pile').innerHTML = deckContent;
             document.getElementById('draw-pile-count').textContent = game.deck.length;
 
             const discardCard = game.discardPile[game.discardPile.length - 1];
-            // Afegim una classe per indicar si és jugable des del discard (només si la carta no està agafada)
             const discardClickableClass = isCurrentTurn && !heldCard && discardCard !== undefined ? 'cursor-pointer hover:border-green-600' : 'cursor-default';
-            // Hem eliminat l'onclick del discard-pile per handleDrawCard('discard') per evitar el modal
             const discardContent = discardCard !== undefined ? `<div class="card-value w-full h-full flex items-center justify-center text-4xl text-red-600" onclick="${isCurrentTurn && !heldCard ? 'window.gameFunctions.handleDrawCard(\'discard\')' : ''}">${discardCard}</div>` : `<div class="flex items-center justify-center w-full h-full text-lg text-gray-500">Buit</div>`;
             document.getElementById('discard-pile').innerHTML = discardContent;
             document.getElementById('discard-pile').className = `w-20 h-32 border-4 border-gray-400 rounded-lg transition duration-200 ${discardClickableClass}`;
@@ -1016,18 +1060,17 @@
             let actionHtml = '';
             
             if (isFinishedHand && game.winnerId === userId) {
-                // Només el guanyador pot fer la puntuació
                 actionHtml = `<button onclick="window.gameFunctions.endHandAndScore()" class="w-full py-3 bg-yellow-500 text-gray-900 font-semibold rounded-lg shadow-md hover:bg-yellow-600 transition duration-300 flex items-center justify-center">
                     <i data-lucide="trophy" class="mr-2"></i> Puntuar i Començar Nova Mà
                 </button>`;
             } else if (isFinishedHand) {
-                actionHtml = `<p class="text-green-700 font-semibold p-2">Esperant que el guanyador (${game.players.find(p => p.id === game.winnerId)?.name}) punti la mà.</p>`;
+                const winnerName = game.players.find(p => p.id === game.winnerId)?.name;
+                actionHtml = `<p class="text-green-700 font-semibold p-2">Esperant que el guanyador (${winnerName}) punti la mà.</p>`;
             } else if (isFinishedGame) {
-                 actionHtml = `<button onclick="window.location.reload()" class="w-full py-3 bg-indigo-500 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-300 flex items-center justify-center">
+                 actionHtml = `<button onclick="window.gameFunctions.resetLobbyState()" class="w-full py-3 bg-indigo-500 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-300 flex items-center justify-center">
                     <i data-lucide="refresh-cw" class="mr-2"></i> Tornar al Lobby
                 </button>`;
             } else if (isCurrentTurn && heldCard) {
-                // *** Actualització: Carta agafada (Estat intermedi) - BLAVA ***
                  actionHtml = `
                     <div class="p-2 border border-blue-200 rounded-lg bg-blue-50">
                         <p class="text-sm font-semibold text-blue-700">Has agafat la carta <span class="text-xl text-red-600 font-extrabold">${heldCard}</span>. Clica una ranura per reemplaçar.</p>
@@ -1037,12 +1080,10 @@
                     </div>
                  `;
             } else if (isCurrentTurn) {
-                // *** Actualització: El teu torn - VERD ***
                 actionHtml = `<p class="text-lg font-bold text-green-700 p-2 border border-green-200 rounded-lg bg-green-100">
                     <i data-lucide="bell" class="w-5 h-5 inline mr-1 animate-pulse"></i> És el teu torn! Tria del munt o del descart.
                 </p>`;
             } else {
-                // *** Actualització: Esperant torn - TARONJA ***
                 const turnPlayerName = game.players.find(p => p.id === game.turn)?.name || 'Algú';
                 actionHtml = `<p class="text-lg font-bold text-orange-700 p-2 border border-orange-200 rounded-lg bg-orange-50">
                     <i data-lucide="loader-2" class="w-5 h-5 inline mr-1 animate-spin"></i> Esperant el torn de ${turnPlayerName}...
@@ -1073,12 +1114,10 @@
                     `;
                 }).join('');
 
-
             // 6. Actualitzar botó de descart immediat si l'estat local ho requereix
             if (isCurrentTurn && heldCard && heldSource === 'draw' && game.status === 'playing') {
                 document.getElementById('discard-immediate-btn')?.classList.remove('hidden');
             }
-
 
             // 7. Actualitzar icones (després de canviar el DOM)
             lucide.createIcons();
@@ -1088,6 +1127,10 @@
         const renderLobbyContent = (game) => {
             const container = document.getElementById('game-container');
             const myPlayer = getMyPlayer();
+            
+            // If myPlayer is null, something went wrong, let the main renderGame handle the error
+            if (!myPlayer) return; 
+
             const creator = game.players[0];
             const isCreator = myPlayer.id === creator.id;
             
@@ -1096,7 +1139,8 @@
             let actionHtml = `<div class="p-6 bg-white rounded-xl shadow-lg w-full max-w-lg mx-auto border-t-4 border-blue-500">
                 <p class="text-xl font-bold mb-4 text-blue-700">Esperant a la Sala d'Espera</p>
                 <p class="text-lg font-bold text-gray-800 mb-2">Codi de Partida (4 Dígits) per Compartir: <span class="text-3xl font-extrabold select-all text-red-600 bg-red-100 p-1 rounded">${gameId}</span></p>
-                <p class="text-sm text-gray-700">Jugadors connectats: ${playerListHtml}</p>
+                <p class="text-sm text-gray-700">Jugadors connectats: ${game.playerIds.length} de ${game.numPlayers}.</p>
+                <p class="text-sm text-gray-700 mt-2">Jugadors: ${playerListHtml}</p>
                 ${game.playerIds.length < game.numPlayers ? 
                     `<p class="text-sm text-gray-700 mt-2">Esperant ${game.numPlayers - game.playerIds.length} jugadors més per començar la partida de ${game.numPlayers} jugadors.</p>` : 
                     `<p class="text-sm text-green-700 mt-2 font-bold">Lobby complet (${game.numPlayers}/${game.numPlayers}).</p>`
@@ -1121,11 +1165,8 @@
             const isCurrentTurn = isMyTurn() && gameState.status === 'playing';
             
             rackElement.innerHTML = myPlayer.rack.map((card, index) => {
-                // Es pot reemplaçar si és el teu torn i tens una carta agafada
                 const isPlayableSlot = isCurrentTurn && heldCard && card !== null && gameState.status === 'playing';
-                
                 let cardHtml;
-                // El Rack-O reparteix les cartes de la ranura 10 a la 1, però visualment volem mostrar l'índex de l'1 al 10
                 const slotNumber = index + 1; 
 
                 if (card === null) {
@@ -1163,13 +1204,14 @@
 
         // Exportar funcions de joc a la finestra per a l'HTML
         window.gameFunctions = {
-            createGame: (num, name) => createGame(num, name), // Passem el nom
-            joinGame: (id, name) => joinGame(id, name), // Passem l'ID i el nom
+            createGame: (num, name) => createGame(num, name),
+            joinGame: (id, name) => joinGame(id, name),
             startGame,
             handleDrawCard,
             handleReplaceCard,
             handleDiscardImmediate,
             endHandAndScore,
+            resetLobbyState: () => resetLobbyState(), // Export without message for UI button
             closeModal
         };
 
