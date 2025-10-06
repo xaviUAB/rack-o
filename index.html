@@ -179,36 +179,26 @@
         /** * ===============================================================================
          * Configuració Manual de Firebase per a Execució Fora de Canvas (com GitHub Pages)
          * ===============================================================================
-         * Quan utilitzis aquest codi fora de l'entorn Canvas, NECESSITES descomentar
-         * i substituir els valors següents per la configuració real del teu projecte Firebase.
-         * Quan l'executes a Canvas, s'utilitzen les variables injectades.
+         * Quan utilitzis aquest codi fora de l'entorn Canvas (p. ex., GitHub Pages), 
+         * NECESSITES substituir l'objecte FIREBASE_SETTINGS a continuació per la teva
+         * configuració real de Firebase. AQUESTA CONFIGURACIÓ HA ESTAT AFEGIDA PER L'USUARI.
          */
-        const FIREBASE_SETTINGS = {
-            // apiKey: "LA_TEVA_API_KEY_AQUI", 
-            // authDomain: "EL_TEU_DOMINI_AUTH_AQUI",
-            // projectId: "EL_TEU_PROJECT_ID_AQUI",
-            // storageBucket: "EL_TEU_STORAGE_BUCKET_AQUI",
-            // messagingSenderId: "EL_TEU_MESSAGING_SENDER_ID_AQUI",
-            // appId: "EL_TEU_APP_ID_AQUI"
-            // Import the functions you need from the SDKs you need
-
-  apiKey: "AIzaSyDQWCvBru356guXE3tAB6R2VjOsqaFHttY",
-  authDomain: "rack-o-16931.firebaseapp.com",
-  projectId: "rack-o-16931",
-  storageBucket: "rack-o-16931.firebasestorage.app",
-  messagingSenderId: "127219641303",
-  appId: "1:127219641303:web:285e63d0bfecb9da4db992",
-  
-};
-
-        };
-        const MANUAL_APP_ID = "racko-github-default"; // ID per defecte si s'executa a GitHub
+        const FIREBASE_SETTINGS = { 
+            apiKey: "AIzaSyDQWCvBru356guXE3tAB6R2VjOsqaFHttY",
+            authDomain: "rack-o-16931.firebaseapp.com",
+            projectId: "rack-o-16931",
+            storageBucket: "rack-o-16931.firebasestorage.app",
+            messagingSenderId: "127219641303",
+            appId: "1:127219641303:web:285e63d0bfecb9da4db992",
+            measurementId: "G-1EQ8RBNL1J"
+        }; 
+        const MANUAL_APP_ID_FOR_PATH = "rack-o-16931"; // Utilitza Project ID com a fallback per la ruta /artifacts/{appId}/public/...
 
 
         // Configuració de Firebase i variables globals (Prioritza Canvas, sinó usa MANUAL)
         const isCanvasEnvironment = typeof __firebase_config !== 'undefined';
         
-        const appId = isCanvasEnvironment ? (typeof __app_id !== 'undefined' ? __app_id : 'default-app-id') : MANUAL_APP_ID;
+        const appId = isCanvasEnvironment ? (typeof __app_id !== 'undefined' ? __app_id : 'default-app-id') : MANUAL_APP_ID_FOR_PATH;
         
         const firebaseConfig = isCanvasEnvironment ? 
             JSON.parse(__firebase_config) : 
@@ -247,9 +237,9 @@
 
         // Inicialització de Firebase
         const initFirebase = async () => {
-            if (Object.keys(firebaseConfig).length === 0) {
+            if (Object.keys(firebaseConfig).length === 0 && !isCanvasEnvironment) {
                 console.error("Firebase config is missing. Please set FIREBASE_SETTINGS for GitHub execution.");
-                document.getElementById('main-container').innerHTML = `<p class="text-red-600">Error: La configuració de Firebase no està disponible. Si ho executes des de GitHub, has d'establir la variable FIREBASE_SETTINGS al codi font.</p>`;
+                document.getElementById('main-container').innerHTML = `<p class="text-red-600">Error: La configuració de Firebase no està disponible. Si ho executes des de GitHub, has d'establir la variable FIREBASE_SETTINGS al codi font amb la teva clau.</p>`;
                 return;
             }
             try {
@@ -283,7 +273,7 @@
             }
         };
 
-        // --- FUNCIONS CORE DE JOC (omitted for brevity, they remain the same) ---
+        // --- FUNCIONS CORE DE JOC ---
         // Funció per crear i barrejar la baralla
         const createAndShuffleDeck = (maxCard) => {
             let newDeck = Array.from({ length: maxCard }, (_, i) => i + 1);
@@ -608,7 +598,6 @@
         const startGame = async () => {
             if (!gameState || gameState.status !== 'lobby' || gameState.playerIds.length < 2) return;
 
-            // Rest of startGame logic (omitted for brevity, remains the same)
             try {
                 await runTransaction(db, async (transaction) => {
                     const gameRef = getGameRef(gameId);
@@ -666,7 +655,6 @@
         };
 
         const handleDrawCard = async (source) => {
-            // Lògica de handleDrawCard (omitted for brevity, remains the same)
             if (!isMyTurn() || heldCard) {
                 if (!isMyTurn()) {
                     showModal("❌ Acció Invàlida", "No és el teu torn.");
@@ -734,7 +722,6 @@
         };
 
         const handleDiscardImmediate = async () => {
-             // Lògica de handleDiscardImmediate (omitted for brevity, remains the same)
             if (!isMyTurn() || !heldCard || heldSource !== 'draw') return showModal("❌ Acció Invàlida", "Només pots descartar immediatament si agafes del munt.");
 
             const cardToDiscard = heldCard;
@@ -771,7 +758,6 @@
 
 
         const handleReplaceCard = async (slotIndex) => {
-            // Lògica de handleReplaceCard (omitted for brevity, remains the same)
             if (!isMyTurn() || !heldCard) return showModal("❌ Acció Invàlida", "Primer has d'agafar una carta.");
             
             const player = getMyPlayer();
@@ -847,7 +833,6 @@
         };
         
         const endHandAndScore = async () => {
-            // Lògica de endHandAndScore (omitted for brevity, remains the same)
             if (!gameState || gameState.status !== 'finished_hand' || gameState.winnerId !== userId) return showModal("❌ Acció Invàlida", "Només el guanyador pot puntuar la mà.");
 
             try {
@@ -993,7 +978,7 @@
                 let errorMessage = `<p class="text-xl text-red-600 font-semibold">Error de sincronització crític. Intenta ${gameId} unir-te de nou o ${game.playerIds.includes(userId) ? 'contacta amb el suport' : 'crea una nova partida'}.</p>`;
                 container.innerHTML = errorMessage;
                 // If we are listening but the player object is missing, reset state
-                if (gameId) resetLobbyState("Error: No es troba el teu jugador a la partida. S'ha restablert la connexió. Pots provar d'unir-te amb el mateix ID de partida.");
+                if (gameId) resetLobbyState("Error: No es troba el teu jugador a la partida. S'ha restablert la connexió. Podras provar d'unir-te amb el mateix ID de partida.");
                 return;
             }
             
