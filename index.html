@@ -147,7 +147,7 @@
                 <!-- El teu Atril (Rack) -->
                 <div class="bg-indigo-50 p-4 rounded-xl shadow-inner mb-6">
                     <h3 class="text-xl font-bold text-indigo-700 mb-3">El Teu Atril (Rack)</h3>
-                    <div id="my-rack" class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                    <div id="my-rack" class="grid grid-flow-col grid-rows-5 grid-cols-2 sm:grid-flow-row sm:grid-cols-5 gap-3">
                         <!-- Les 10 ranures de l'atril es renderitzaran aquí -->
                     </div>
                 </div>
@@ -430,6 +430,29 @@
             }
             // En un Rack-O perfecte (ordre ascendent complet), la puntuació seria 50 (10*5).
             return score;
+        };
+        
+        // NOU: Funció per calcular el bonus per seqüències (runs)
+        const calculateRunBonus = (rack) => {
+            if (!rack || rack.length !== NUM_CARDS_IN_RACK || rack.includes(null)) return 0;
+            
+            let longestRun = 0;
+            let currentRun = 1;
+            for (let i = 1; i < rack.length; i++) {
+                if (rack[i] === rack[i - 1] + 1) {
+                    currentRun++;
+                } else {
+                    longestRun = Math.max(longestRun, currentRun);
+                    currentRun = 1;
+                }
+            }
+            longestRun = Math.max(longestRun, currentRun); // Comprova la darrera seqüència
+
+            if (longestRun >= 6) return 400;
+            if (longestRun === 5) return 200;
+            if (longestRun === 4) return 100;
+            if (longestRun === 3) return 50;
+            return 0;
         };
         // --- FI DE FUNCIONS CORE DE JOC ---
 
@@ -1026,11 +1049,20 @@
 
                     let players = game.players;
                     const winnerId = game.winnerId;
+                    let bonusMessage = '';
                     
                     const newScores = players.map(p => {
                         let score = 0;
                         if (p.id === winnerId) {
-                            score = RACKO_POINTS; 
+                            let bonus = 0;
+                            // NOU: Càlcul de bonus per a 3 i 4 jugadors
+                            if (game.numPlayers > 2) {
+                                bonus = calculateRunBonus(p.rack);
+                                if (bonus > 0) {
+                                    bonusMessage = `${p.name} guanya un bonus de ${bonus} punts per una seqüència!`;
+                                }
+                            }
+                            score = RACKO_POINTS + bonus; 
                         } else {
                             // Puntuació de seqüència per als que no han guanyat
                             score = calculateSequenceScore(p.rack); 
@@ -1056,14 +1088,12 @@
 
                     const playersForNextHand = newScores.map(p => {
                         const newRack = [];
-                        // Reparteix 10 cartes noves, de baix a dalt (pop in, reverse at the end)
+                        // Reparteix 10 cartes noves
                         for (let i = 0; i < NUM_CARDS_IN_RACK; i++) {
                             const card = deck.pop(); 
-                            if (card !== undefined) {
-                                newRack.push(card);
-                            }
+                            if (card !== undefined) { newRack.push(card); }
                         }
-                        newRack.reverse(); // Col·locar-les correctament (el 1r pop és la carta més alta)
+                        // Les cartes es reparteixen correctament en ordre aleatori
 
                         return { ...p, rack: newRack };
                     });
@@ -1072,6 +1102,11 @@
                         newDiscardPile.push(deck.pop());
                     }
 
+                    const finalMessages = ["La mà ha acabat. Punts de ronda assignats."];
+                    if (bonusMessage) finalMessages.push(bonusMessage);
+                    finalMessages.push(`Comença la nova mà ${gameWinner ? '(FINALITZADA)' : ''}.`);
+
+
                     transaction.update(gameRef, {
                         status: gameWinner ? 'finished' : 'playing',
                         players: playersForNextHand,
@@ -1079,7 +1114,7 @@
                         discardPile: newDiscardPile,
                         turn: nextTurnId,
                         winnerId: gameWinner ? gameWinner.id : null,
-                        messages: arrayUnion(`La mà ha acabat. Punts de ronda assignats. Comença la nova mà ${gameWinner ? '(FINALITZADA)' : ''}.`),
+                        messages: arrayUnion(...finalMessages),
                         lastUpdate: Date.now() // Actualitza timestamp
                     });
                 });
@@ -1489,11 +1524,16 @@
             const isCurrentTurn = isMyTurn() && gameState.status === 'playing';
             
             rackElement.innerHTML = myPlayer.rack.map((card, index) => {
-                // Es pot reemplaçar si és el teu torn, tens una carta a la mà, i el joc està actiu
                 const isPlayableSlot = isCurrentTurn && heldCard && card !== null && gameState.status === 'playing';
-                let cardHtml;
                 const slotNumber = index + 1; 
 
+                // NOU: Lògica de color per al número de la ranura
+                const isSlotCorrect = (index === 0 && card !== null) || 
+                                      (index > 0 && card !== null && myPlayer.rack[index - 1] !== null && card > myPlayer.rack[index - 1]);
+                const slotNumberColorClass = isSlotCorrect ? 'text-green-600' : 'text-red-600';
+
+
+                let cardHtml;
                 if (card === null) {
                     cardHtml = `<div class="card-slot not-playable">
                         ${slotNumber}
@@ -1507,7 +1547,7 @@
 
                 return `
                     <div class="flex items-center space-x-2">
-                        <span class="text-sm font-bold text-gray-800 w-6 text-right">${slotNumber}:</span>
+                        <span class="text-sm font-bold w-6 text-right ${slotNumberColorClass}">${slotNumber}:</span>
                         <div class="flex-1">
                             ${cardHtml}
                         </div>
@@ -1537,5 +1577,4 @@
     </script>
 </body>
 </html>
-
 
