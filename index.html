@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rack-O Game: Multijugador.</title>
+    <title>Rack-O Game: Multijugador</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inclou les icones Lucide -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -879,11 +879,17 @@
                     
                     if (game.turn !== userId) throw new Error("Ja no és el teu torn.");
 
-                    // S'ha eliminat la lògica de barreja automàtica d'aquí.
-
                     if (source === 'draw') {
-                        cardValue = game.deck.pop(); 
-                        if (cardValue === undefined) throw new Error("Baralla buida."); 
+                        // CORRECCIÓ: Utilitzem slice per eliminar explícitament l'últim element, 
+                        // en lloc de confiar en la mutació in-place de pop(), la qual cosa pot 
+                        // haver causat el problema de la doble resta.
+                        const deckLength = game.deck.length;
+                        if (deckLength === 0) throw new Error("Baralla buida."); 
+                        
+                        cardValue = game.deck[deckLength - 1]; // Agafem la darrera carta
+                        
+                        // Creem el nou array (sense la darrera carta), assegurant una resta d'una sola carta
+                        game.deck = game.deck.slice(0, deckLength - 1); 
                     } else if (source === 'discard') {
                         cardValue = game.discardPile.pop();
                          if (cardValue === undefined) throw new Error("Descart buit.");
@@ -1622,7 +1628,7 @@
             deleteGameAndReset, 
             confirmReset, 
             closeModal,
-            handleReshuffle // NOU: Exportar la funció de barrejar
+            handleReshuffle 
         };
 
         // Inici de l'aplicació
