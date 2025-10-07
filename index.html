@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rack-O Game: Multijugador</title>
+    <title>Rack-O Game: Multijugador.</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inclou les icones Lucide -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -123,8 +123,9 @@
                         <h4 class="font-bold text-gray-700 mb-2 flex items-center">
                             <i data-lucide="layers" class="w-4 h-4 mr-1"></i> Munt (<span id="draw-pile-count">0</span>)
                         </h4>
-                        <div id="draw-pile" class="w-20 h-32 border-4 border-gray-400 rounded-lg cursor-pointer hover:border-indigo-600 transition duration-200">
-                            <!-- Carta coberta -->
+                        <!-- El contenidor del munt, el contingut i l'acció es defineixen dinàmicament al JS -->
+                        <div id="draw-pile" class="w-20 h-32 border-4 border-gray-400 rounded-lg cursor-pointer transition duration-200">
+                            <!-- Carta coberta / Botó de Barrejar / Buit -->
                         </div>
                     </div>
                     
@@ -808,6 +809,47 @@
                 }
             }
         };
+        
+        // NOU: Funció per barrejar explícitament la pila de descartes
+        const handleReshuffle = async () => {
+            if (!isMyTurn() || gameState.deck.length !== 0) {
+                // Aquesta comprovació hauria de ser redundant si el botó es renderitza correctament
+                return showModal("❌ Acció Invàlida", "Només pots barrejar quan és el teu torn i el munt està buit.");
+            }
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const gameRef = getGameRef(gameId);
+                    const gameDoc = await transaction.get(gameRef);
+                    const game = gameDoc.data(); 
+
+                    if (game.turn !== userId) throw new Error("Ja no és el teu torn.");
+                    if (game.deck.length !== 0) throw new Error("El munt no està buit. No cal barrejar.");
+                    if (game.discardPile.length <= 1) throw new Error("No queden suficients cartes per barrejar. Espera a que hi hagi més de una carta al descart.");
+                    
+                    // 1. Treure la carta superior del descart
+                    const topDiscardCard = game.discardPile.pop();
+                    let cardsToReshuffle = game.discardPile;
+                    
+                    // 2. Barrejar les cartes restants
+                    const newDeck = shuffleArray(cardsToReshuffle);
+                    const newDiscardPile = [topDiscardCard];
+
+                    // 3. Actualitzar l'estat
+                    transaction.update(gameRef, {
+                        deck: newDeck,
+                        discardPile: newDiscardPile,
+                        messages: arrayUnion(`${getMyPlayer().name} ha barrejat la pila de descarts. El joc continua!`),
+                        lastUpdate: Date.now()
+                    });
+                });
+                
+            } catch (error) {
+                console.error("Error barrejant la pila de descarts:", error);
+                showModal("Error de Barrejada", `No s'ha pogut barrejar la pila de descarts: ${error.message}`);
+            }
+        };
+
 
         const handleDrawCard = async (source) => {
             if (!isMyTurn() || heldCard) {
@@ -818,43 +860,30 @@
                 }
                 return;
             }
-            // Eliminem la comprovació prematura de munt buit; ara es gestiona a la transacció.
+            
             if (source === 'discard' && gameState.discardPile.length === 0) return showModal("❌ Descart Buida", "La pila de descarts està buida.");
             
+            // NOU: Si intenten agafar del munt buit, han d'utilitzar el botó de barrejar (que ja hauria d'estar visible).
+            if (source === 'draw' && gameState.deck.length === 0) {
+                 return showModal("❌ Munt Buit", "El munt està buit. Si us plau, clica el botó 'Barrejar Descartades' que ha d'aparèixer per continuar.");
+            }
+
+
             let cardValue = null;
 
             try {
                 await runTransaction(db, async (transaction) => {
                     const gameRef = getGameRef(gameId);
                     const gameDoc = await transaction.get(gameRef);
-                    let game = gameDoc.data(); // 'let' per permetre modificació
+                    const game = gameDoc.data(); 
                     
                     if (game.turn !== userId) throw new Error("Ja no és el teu torn.");
 
-                    let newMessages = [];
-
-                    // NOU: Lògica per barrejar si el munt està buit
-                    if (source === 'draw' && game.deck.length === 0) {
-                        console.log("[RESHUFFLE] Munt buit. Intentant barrejar descarts.");
-                        
-                        if (game.discardPile.length <= 1) {
-                            throw new Error("No queden cartes per agafar ni al munt ni per barrejar des dels descarts.");
-                        }
-
-                        const topDiscardCard = game.discardPile.pop();
-                        let cardsToReshuffle = game.discardPile;
-
-                        // Actualitzem l'estat del joc DINS de la variable 'game' per a la transacció
-                        game.deck = shuffleArray(cardsToReshuffle);
-                        game.discardPile = [topDiscardCard];
-                        newMessages.push("El munt s'ha quedat buit i s'ha barrejat la pila de descarts.");
-                        console.log(`[RESHUFFLE] S'han mogut ${game.deck.length} cartes al munt. La carta ${topDiscardCard} roman al descart.`);
-                    }
-
+                    // S'ha eliminat la lògica de barreja automàtica d'aquí.
 
                     if (source === 'draw') {
                         cardValue = game.deck.pop(); 
-                        if (cardValue === undefined) throw new Error("Baralla buida. No s'ha pogut agafar una carta després de barrejar.");
+                        if (cardValue === undefined) throw new Error("Baralla buida."); 
                     } else if (source === 'discard') {
                         cardValue = game.discardPile.pop();
                          if (cardValue === undefined) throw new Error("Descart buit.");
@@ -865,10 +894,6 @@
                         discardPile: game.discardPile,
                         lastUpdate: Date.now()
                     };
-
-                    if (newMessages.length > 0) {
-                        updateData.messages = arrayUnion(...newMessages);
-                    }
                     
                     transaction.update(gameRef, updateData);
                 });
@@ -1363,10 +1388,37 @@
 
 
             // 6. Renderitzat del Tauler de Joc (Deck & Discard)
-            const deckContent = game.deck.length > 0 ? `<div class="card-back flex items-center justify-center rounded-lg w-full h-full text-2xl" onclick="${isCurrentTurn && !heldCard ? 'window.gameFunctions.handleDrawCard(\'draw\')' : ''}">
-                <i data-lucide="layers"></i>
-            </div>` : `<div class="flex items-center justify-center w-full h-full text-lg text-gray-500">Buit</div>`;
-            document.getElementById('draw-pile').innerHTML = deckContent;
+            const isDeckEmpty = game.deck.length === 0;
+            const drawPileElement = document.getElementById('draw-pile');
+            let deckContent = '';
+            let drawPileClickAction = '';
+            let drawPileClickableClass = 'cursor-default';
+
+            if (isDeckEmpty && isCurrentTurn && game.discardPile.length > 1) {
+                // Munt buit, és el nostre torn i hi ha cartes suficients per barrejar
+                deckContent = `<button onclick="window.gameFunctions.handleReshuffle()" class="w-full h-full bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-bold text-sm p-1 rounded-lg flex flex-col items-center justify-center transition duration-200">
+                    <i data-lucide="shuffle" class="w-5 h-5 mb-1"></i> Barrejar Descartades
+                </button>`;
+                drawPileClickableClass = 'border-yellow-500 ring-2 ring-yellow-300';
+                
+            } else if (isDeckEmpty) {
+                // Munt buit, no és el nostre torn o no hi ha cartes suficients per barrejar
+                deckContent = `<div class="flex items-center justify-center w-full h-full text-sm text-gray-500 font-semibold">MUNT BUIT</div>`;
+                drawPileClickableClass = 'border-gray-400';
+                
+            } else {
+                // Munt amb cartes: L'acció de clic és la de draw
+                drawPileClickAction = `${isCurrentTurn && !heldCard ? 'window.gameFunctions.handleDrawCard(\'draw\')' : ''}`;
+                drawPileClickableClass = isCurrentTurn && !heldCard ? 'cursor-pointer hover:border-indigo-600' : 'cursor-default';
+                deckContent = `<div class="card-back flex items-center justify-center rounded-lg w-full h-full text-2xl" onclick="${drawPileClickAction}">
+                    <i data-lucide="layers"></i>
+                </div>`;
+            }
+            
+            drawPileElement.innerHTML = deckContent;
+            drawPileElement.className = `w-20 h-32 border-4 rounded-lg transition duration-200 ${drawPileClickableClass}`;
+            // S'elimina l'onclick de l'element contenidor si hi ha un botó dins
+            drawPileElement.setAttribute('onclick', isDeckEmpty && isCurrentTurn ? '' : drawPileClickAction); 
             document.getElementById('draw-pile-count').textContent = game.deck.length;
 
             const discardCard = game.discardPile[game.discardPile.length - 1];
@@ -1563,13 +1615,14 @@
             startGame,
             handleDrawCard,
             handleReplaceCard,
-            handleDiscardHeldCard, // Funció de descart actualitzada
+            handleDiscardHeldCard, 
             endHandAndScore,
-            resetLobbyState: () => resetLobbyState(), // Export without message for UI button
+            resetLobbyState: () => resetLobbyState(), 
             triggerRemoteBeep, 
             deleteGameAndReset, 
             confirmReset, 
-            closeModal
+            closeModal,
+            handleReshuffle // NOU: Exportar la funció de barrejar
         };
 
         // Inici de l'aplicació
@@ -1577,4 +1630,3 @@
     </script>
 </body>
 </html>
-
